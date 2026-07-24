@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>CodeLight</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true"><img src="../resources/codelight-logo.png" alt=""></div>
+        <div><h1>CodeLight</h1><p>AI 编程工具状态中心</p></div>
+      </div>
+
+      <div id="agentStrip" class="agent-strip" aria-label="置顶 Agent 接入状态"></div>
+
+      <div class="top-actions">
+        <span id="connectionBadge" class="connection-badge pending"><i></i><span>正在检查</span></span>
+        <button id="settingsButton" class="icon-button menu-bars" type="button" aria-label="打开设置" title="Provider 与设备设置">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5v14M12 5v14M17 5v14"/></svg>
+        </button>
+        <button id="hideWindow" class="icon-button" type="button" aria-label="隐藏窗口" title="隐藏到菜单栏">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <main>
+      <section class="overview-grid" aria-label="当前状态与 AI 工具看板">
+        <article class="panel current-panel" aria-labelledby="currentTitle">
+          <div class="panel-heading">
+            <div><span class="section-kicker">实体状态灯</span><h2 id="currentTitle">当前状态</h2></div>
+            <span id="backendMode" class="quiet-badge">后台检查中</span>
+          </div>
+          <div class="fleet-toolbar">
+            <div class="current-row"><strong id="currentState">熄灭</strong><span id="currentReason">没有待处理状态</span></div>
+            <div class="hero-actions">
+              <button id="connectButton" class="primary-button" type="button">连接设备</button>
+              <button id="offButton" class="secondary-button" type="button">全部熄灭</button>
+            </div>
+          </div>
+          <div id="lampFleet" class="lamp-fleet" aria-label="实体灯设备状态"></div>
+        </article>
+
+        <article class="panel quota-panel" aria-labelledby="quotaTitle">
+          <div class="panel-heading quota-heading">
+            <div class="quota-brand">
+              <span id="quotaProviderIcon" class="provider-icon large"><img src="../resources/providers/codex.svg" alt=""></span>
+              <div><span id="quotaProviderName" class="section-kicker codex-kicker">OpenAI Codex</span><h2 id="quotaTitle">额度与状态看板</h2></div>
+            </div>
+            <div class="quota-actions">
+              <div id="quotaProviderTabs" class="quota-provider-tabs" aria-label="常用 Agent 看板"></div>
+              <select id="quotaProviderSelect" class="quota-provider-select" aria-label="选择看板工具"></select>
+              <span id="quotaPlan" class="plan-badge">—</span>
+              <button id="refreshQuota" class="refresh-icon" type="button" aria-label="刷新看板" title="刷新看板">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6v5h-5M4 18v-5h5M6.1 9a7 7 0 0 1 11.7-2.6L20 9M4 15l2.2 2.6A7 7 0 0 0 17.9 15"/></svg>
+              </button>
+            </div>
+          </div>
+          <div id="quotaLanes" class="quota-lanes" aria-live="polite">
+            <div class="quota-loading"><span></span>正在读取 Agent 数据</div>
+          </div>
+          <div class="quota-meta">
+            <span id="quotaCredits">数据源 —</span>
+            <span id="quotaUpdated">尚未更新</span>
+          </div>
+        </article>
+      </section>
+
+      <section class="status-grid" aria-label="状态映射与手动测试">
+        <button class="status-card green" data-color="green" type="button">
+          <span class="swatch"></span><span class="card-copy"><strong>任务完成</strong><small>默认亮 60 秒</small></span>
+        </button>
+        <button class="status-card yellow" data-color="yellow" type="button">
+          <span class="swatch"></span><span class="card-copy"><strong>等待授权</strong><small>需要批准</small></span>
+        </button>
+        <button class="status-card blue" data-color="blue" type="button">
+          <span class="swatch"></span><span class="card-copy"><strong>需要回答</strong><small>等待输入</small></span>
+        </button>
+        <button class="status-card red" data-color="red" type="button">
+          <span class="swatch"></span><span class="card-copy"><strong>发生故障</strong><small>网络或工具</small></span>
+        </button>
+      </section>
+
+      <section class="lower-grid">
+        <article class="panel settings-panel">
+          <div class="panel-heading compact-heading"><div><span class="section-kicker">设备</span><h2>控制与接入</h2></div><span id="chargerBadge" class="micro-badge">充电灯已隐藏</span></div>
+          <div class="settings-list">
+            <div class="setting-row">
+              <div><strong>充电时保持熄灭</strong><p>隐藏四格充电动画</p></div>
+              <label class="switch" aria-label="充电时保持熄灭"><input id="chargerToggle" type="checkbox" checked><span></span></label>
+            </div>
+            <div class="setting-row">
+              <div><strong>临时查看电量</strong><p>10 秒后自动隐藏</p></div>
+              <button id="previewCharge" class="secondary-button compact" type="button">显示 10 秒</button>
+            </div>
+            <div class="setting-row integration-row">
+              <div><strong>AI 工具 Providers</strong><p id="hookState">正在检查</p></div>
+              <button id="installHooks" class="secondary-button compact" type="button">安装适配器</button>
+            </div>
+          </div>
+        </article>
+
+        <article class="panel log-panel">
+          <div class="panel-heading compact-heading"><div><span class="section-kicker">记录</span><h2>最近事件</h2></div><button id="refreshButton" class="text-button" type="button">刷新</button></div>
+          <ol id="eventLog" class="event-log"><li class="empty">暂无事件</li></ol>
+        </article>
+      </section>
+    </main>
+  </div>
+  <div id="connectionModal" class="modal-backdrop" role="presentation" hidden>
+    <section class="connection-modal" role="dialog" aria-modal="true" aria-labelledby="connectionModalTitle" aria-describedby="connectionModalMessage">
+      <div class="connection-modal-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="m7 7 10 10-5 4V3l5 4L7 17"/></svg>
+      </div>
+      <div class="connection-modal-copy">
+        <span class="section-kicker">蓝牙设备</span>
+        <h2 id="connectionModalTitle">连接蓝牙跑马灯</h2>
+        <p id="connectionModalMessage">打开跑马灯并保持在 Mac 附近，然后搜索蓝牙设备并点击连接。</p>
+      </div>
+      <div id="connectionDeviceList" class="connection-device-list" aria-live="polite"></div>
+      <div class="connection-modal-actions">
+        <button id="connectionLater" class="secondary-button" type="button">稍后处理</button>
+        <button id="connectionNow" class="primary-button" type="button">搜索蓝牙设备</button>
+      </div>
+    </section>
+  </div>
+  <div id="settingsModal" class="modal-backdrop settings-backdrop" role="presentation" hidden>
+    <section class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+      <header class="settings-modal-header">
+        <div><span class="section-kicker">CODELIGHT</span><h2 id="settingsTitle">设置与路由</h2></div>
+        <button id="settingsClose" class="icon-button" type="button" aria-label="关闭设置"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+      </header>
+      <div class="settings-workspace">
+        <nav class="settings-tabs" aria-label="设置页面">
+          <button class="settings-tab active" data-settings-tab="general" type="button">通用</button>
+          <button class="settings-tab" data-settings-tab="providers" type="button">Providers</button>
+          <button class="settings-tab" data-settings-tab="devices" type="button">蓝牙灯</button>
+          <button class="settings-tab" data-settings-tab="events" type="button">事件记录</button>
+        </nav>
+        <div class="settings-pages">
+          <section class="settings-page active" data-settings-page="general">
+            <div class="settings-page-heading"><div><h3>通用提醒</h3><p>灯光和系统通知共用同一套事件设置。</p></div></div>
+            <div class="form-card">
+              <label class="field-row"><span><strong>状态持续时间</strong><small>新事件会立即打断并重新计时</small></span>
+                <select id="durationSelect">
+                  <option value="10">10 秒</option><option value="30">30 秒</option><option value="60">60 秒（默认）</option>
+                  <option value="120">2 分钟</option><option value="300">5 分钟</option><option value="0">一直亮到处理</option>
+                </select>
+              </label>
+              <label class="field-row"><span><strong>桌面通知</strong><small>状态灯变化时同步通知</small></span><span class="switch"><input id="notificationEnabled" type="checkbox"><span></span></span></label>
+              <label class="field-row"><span><strong>完成通知</strong><small>绿灯事件</small></span><span class="switch"><input id="notificationSuccess" type="checkbox"><span></span></span></label>
+              <label class="field-row"><span><strong>需要处理</strong><small>黄灯与蓝灯事件</small></span><span class="switch"><input id="notificationAttention" type="checkbox"><span></span></span></label>
+              <label class="field-row"><span><strong>故障通知</strong><small>红灯事件</small></span><span class="switch"><input id="notificationError" type="checkbox"><span></span></span></label>
+            </div>
+            <div class="settings-page-actions"><button id="saveGeneral" class="primary-button" type="button">保存通用设置</button></div>
+          </section>
+
+          <section class="settings-page" data-settings-page="providers" hidden>
+            <div class="provider-workspace">
+              <aside class="provider-sidebar">
+                <div class="provider-sidebar-heading"><div><h3>Providers</h3><small id="providerCount">0 个</small></div><button id="addProvider" class="small-icon-button" type="button" aria-label="添加 Provider">＋</button></div>
+                <div id="providerList" class="provider-list"></div>
+              </aside>
+              <form id="providerForm" class="provider-editor">
+                <div class="provider-editor-heading"><div id="providerIconPreview" class="provider-editor-icon">C</div><div><h3 id="providerEditorTitle">选择 Provider</h3><p>事件协议、通知跳转与设备绑定共用该 ID。</p></div></div>
+                <div class="form-grid two-columns">
+                  <label><span>Provider ID</span><input id="providerId" autocomplete="off" placeholder="my-agent"></label>
+                  <label><span>显示名称</span><input id="providerName" autocomplete="off" placeholder="My Agent"></label>
+                  <label><span>简称</span><input id="providerShort" autocomplete="off" placeholder="Agent"></label>
+                  <label><span>主题颜色</span><input id="providerAccent" type="color" value="#8aa0b3"></label>
+                </div>
+                <label class="path-field"><span>图标文件</span><div><input id="providerIcon" autocomplete="off" placeholder="PNG / SVG 路径"><button id="chooseProviderIcon" class="secondary-button compact" type="button">选择</button></div></label>
+                <label class="path-field"><span>通知点击后打开</span><div><input id="providerAppPath" autocomplete="off" placeholder="软件路径；留空时使用默认应用名"><button id="chooseProviderApp" class="secondary-button compact" type="button">选择</button></div></label>
+                <div class="field-row provider-enabled-row"><span><strong>显示与接入</strong><small id="providerBridgeCommand">通用事件桥命令将在此显示</small></span><div class="provider-switches"><label>启用<span class="switch"><input id="providerEnabled" type="checkbox"><span></span></span></label><label>首页<span class="switch"><input id="providerPinned" type="checkbox"><span></span></span></label></div></div>
+                <div class="provider-editor-actions"><button id="deleteProvider" class="danger-button" type="button">删除</button><span></span><button id="testProviderNotification" class="secondary-button" type="button">测试通知</button><button class="primary-button" type="submit">保存 Provider</button></div>
+              </form>
+            </div>
+          </section>
+
+          <section class="settings-page" data-settings-page="devices" hidden>
+            <div class="settings-page-heading"><div><h3>蓝牙跑马灯与工具绑定</h3><p>在本页搜索附近设备，点击连接；每盏灯只处理绑定 Provider 的事件。</p></div><button id="scanDevices" class="primary-button" type="button">搜索蓝牙设备</button></div>
+            <div id="deviceManagerList" class="device-manager-list"></div>
+            <div id="deviceScanResults" class="device-scan-results" aria-live="polite"></div>
+          </section>
+
+          <section class="settings-page" data-settings-page="events" hidden>
+            <div class="settings-page-heading"><div><h3>完整事件记录</h3><p>被新事件打断的状态仍保留在这里。</p></div><button id="refreshFullEvents" class="secondary-button compact" type="button">刷新</button></div>
+            <ol id="fullEventLog" class="full-event-log"></ol>
+          </section>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div id="toastRegion" class="toast-region" aria-live="polite" aria-atomic="true"></div>
+  <span id="footerVersion" hidden>CodeLight</span>
+  <script src="ble-controller.js"></script>
+  <script src="renderer.js"></script>
+</body>
+</html>
