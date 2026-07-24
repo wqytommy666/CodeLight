@@ -1,101 +1,281 @@
-# CodeLight
+<div align="center">
+  <img src="desktop-app/resources/codelight-logo.png" width="152" alt="CodeLight logo">
 
-把 `JTX-RGB / Colorful Lights` 拾音灯变成 AI 编程 Agent 的实体状态灯。BLE 控制器使用 macOS 原生 CoreBluetooth；常驻后台后不需要打开手机 App，也不需要网络。
+  # CodeLight
 
-## 已绑定的本机设备
+  **让 AI 编程 Agent 的状态真正亮起来。**<br>
+  **See what your AI coding agents need — at a glance.**
 
-`device.id` 保存了这台 Mac 为 `JTX-RGB` 分配的 CoreBluetooth peripheral UUID。这里的“绑定”是保存设备标识并按需直连；该灯不要求在 macOS 蓝牙设置中做传统配对。
+  将 Claude、Codex 等 AI 编程工具的任务状态同步到实体蓝牙灯和桌面通知。<br>
+  Sync Claude, Codex, and other coding-agent events to physical BLE lights and desktop notifications.
 
-## BLE 探测
+  [简体中文](#简体中文) · [English](#english)
+</div>
 
-```bash
-./run.sh probe
-./run.sh scan 15
+![CodeLight 控制中心 / CodeLight control center](desktop-app/docs/control-center.png)
+
+---
+
+## 简体中文
+
+### CodeLight 是什么？
+
+CodeLight 是一个面向 AI 编程工作流的 macOS / Windows 桌面应用。它把 Claude、Codex、OpenCode 等工具的“任务完成、等待授权、等待回答、运行故障”转换成直观的实体灯光和系统通知，让你不必反复切换窗口查看任务是否需要处理。
+
+项目目前针对 **JTX-RGB / Colorful Lights** 拾音跑马灯完成了实机 BLE 协议适配。连接由电脑直接维护，日常使用不需要保持手机 App 开启，也不依赖云端服务。
+
+### 灯光协议
+
+| 颜色 | 状态 | 默认行为 |
+|---|---|---|
+| 🟢 绿色 | 任务或当前回合完成 | 快速闪烁后常亮 60 秒 |
+| 🟡 黄色 | 等待授权、权限或高风险操作确认 | 快速闪烁后常亮，处理后熄灭 |
+| 🔵 蓝色 | 等待回答、选择或补充信息 | 快速闪烁后常亮，回复后熄灭 |
+| 🔴 红色 | 网络、模型/API、认证、限流或工具故障 | 快速闪烁后常亮，恢复后熄灭 |
+| ⚫ 熄灭 | 正在正常执行，或没有待处理事件 | 保持熄灭 |
+
+- 默认亮灯时间为 60 秒，可选择 10 秒、30 秒、2 分钟、5 分钟或一直亮到手动处理。
+- 新事件会立即打断当前灯光并重新计时。
+- 多个事件竞争同一盏灯时，优先级为：**红 > 黄 > 蓝 > 绿**；同级事件显示最新一条。
+- 每盏灯拥有独立的状态队列和计时器，多设备之间互不影响。
+
+### 核心功能
+
+- **实体 BLE 状态灯**：macOS 使用原生 CoreBluetooth 后台服务；Windows 使用 Electron Web Bluetooth。
+- **桌面通知联动**：状态变化时同步发送系统通知，通知包含工具和项目名称；点击可打开对应软件。
+- **多灯独立绑定**：可同时管理多盏 JTX-RGB，为设备自动编号、设置别名，并分别绑定不同 Provider。
+- **可扩展 Provider 架构**：Provider 的名称、图标、软件路径、首页置顶和灯光绑定都可在设置中维护。
+- **Agent 额度看板**：显示 Codex 主额度 / Spark 额度，以及 Claude 5 小时、每周和 Fable 5 等实时额度。
+- **完整事件记录**：即使新事件打断了旧灯光，历史状态仍可在应用内查看。
+- **充电动画隐藏**：默认抑制设备固件的四格充电闪烁，需要时可临时显示 10 秒查看电量。
+- **本地优先**：BLE 控制、Hook 事件和状态聚合均在本机运行。
+- **后台常驻**：支持登录启动和托盘运行，关闭主窗口不会中断状态监听。
+
+### Provider 预设
+
+CodeLight 内置以下工具的 Provider 配置和品牌图标：
+
+`Claude` · `Codex` · `OpenCode` · `MiMo Code` · `Zed Code` · `Hermes` · `Kilo Code / KCode` · `Gemini CLI` · `Amp` · `Cursor` · `Cline` · `Roo Code` · `Aider` · `Goose` · `Continue` · `Qwen Code` · `Trae` · `Windsurf` · `GitHub Copilot` · `Kiro` · `Kimi` · `OpenHands` · `Antigravity` · `Crush` · `Pi`
+
+你也可以直接在设置中添加自定义 Provider，无需修改状态机核心代码。不同工具的自动事件接入由对应 Hook / Adapter 提供；Claude、Codex 和 OpenCode 已包含本地接入实现。
+
+### 多设备工作方式
+
+```text
+Claude ────→ 跑马灯 A（工作台左侧）
+Codex  ────→ 跑马灯 B（工作台右侧）
+OpenCode ──→ 跑马灯 C（共享设备）
+              └─ 独立优先级、灯光和倒计时
 ```
 
-探测成功会输出 `CONNECTED`、服务/特征列表以及 `PROBE_OK`。
+首页会根据设备数量自适应展示 1–8 张设备卡片；更多设备进入完整管理页面。设备可以使用蓝牙标识生成稳定编号，也可以设置更容易识别的自定义名称。
 
-## 手动灯光控制
+### 快速开始
+
+#### 环境要求
+
+- macOS 或 Windows 10/11
+- Node.js 22
+- macOS 本地开发需要 Xcode Command Line Tools / Swift 编译器
+- 一盏已上电并处于附近的 JTX-RGB / Colorful Lights 设备
+
+#### 从源码运行
 
 ```bash
+git clone https://github.com/wqytommy666/CodeLight.git
+cd CodeLight
+
+# 仅 macOS：编译原生 CoreBluetooth 后台服务
+./build_daemon.sh
+
+cd desktop-app
+npm ci
+npm run check
+npm start
+```
+
+首次打开时，请允许 **蓝牙** 和 **通知** 权限。进入“设备”页面后可直接扫描附近蓝牙灯并点击连接；未连接或意外掉线时，CodeLight 会弹窗提醒。
+
+#### 命令行控制（macOS）
+
+```bash
+./run.sh scan 15
 ./light.sh green
 ./light.sh yellow
 ./light.sh blue
 ./light.sh red
 ./light.sh test
-./light.sh blink red 3 0.4
 ./light.sh off
 ```
 
-`test` 会按红、黄、蓝、绿依次显示，并最终停在绿色。`blink` 在闪烁结束后保持熄灭。
-
-## AI 编程工具状态灯
-
-### 状态约定
-
-| 灯色 | 场景 | 何时熄灭 |
-|---|---|---|
-| 绿 | 当前任务/回合完成 | 爆闪后常亮 60 秒；新的完成事件会立即重新爆闪并刷新计时 |
-| 黄 | 等待工具授权、系统权限或有副作用操作确认 | 授权后工具开始运行，或提交新消息时 |
-| 蓝 | AI 正在询问普通问题、要求补充内容或选择方案 | 提交回答时 |
-| 红 | 明确的工具失败、模型/API、网络、认证或限流故障 | 后续活动恢复、重试成功或提交新消息时 |
-| 灭 | 正常处理中或没有待处理状态 | — |
-
-每次进入有色状态都会先 **快速爆闪 3 次**，然后稳定常亮。处理完事件会立即取消尚未完成的闪烁序列并熄灭。多任务同时存在时按 `红 > 黄 > 蓝 > 绿` 聚合显示。
-
-### 安装
+### 构建与测试
 
 ```bash
-./install.sh
-```
-
-回归测试：
-
-```bash
+# 后台控制器测试
 python3 -m unittest discover -s tests -v
-cd desktop-app && npm run check
+
+# 桌面端检查与测试
+cd desktop-app
+npm run check
+
+# macOS DMG + ZIP
+../build_daemon.sh ../.build/agent-light-daemon
+npm run build:mac
+
+# Windows 安装版 + 便携版（请在 Windows 环境运行）
+npm run build:win
 ```
 
-安装内容：
+构建产物保存在 `desktop-app/dist/`。
 
-- `~/.agent-status-light/bin/agent-light-daemon-*`：由 CodeLight 应用持有的 BLE 子进程，避免每个事件重新连接的延迟，并让系统把蓝牙权限明确归属给 CodeLight。
-- `~/.agent-status-light/bin/agent-light-hook`：毫秒级本地 hook 客户端。
-- `~/.agent-status-light/bin/agent-light-watch`：补足 Codex 在模型/API 请求直接失败时不会发出 Stop hook 的情况，0.5 秒轮询本地 rollout 增量。
-- `~/Library/LaunchAgents/com.local.agent-status-light-watch.plist`：让上述 Codex 故障监听器登录后常驻。
-- 已有的 Ping Island / Coffee hook relay：复用其 Claude 与 Codex 生命周期入口，不重复建立另一套监控器；修改前自动生成 `*.before-agent-light` 备份。
-- Claude `PostToolUseFailure` hook：补充明确失败事件。
+### 硬件与协议
 
-Claude 桌面版的本地 Agent/Cowork 会启动内置 Claude Code，并使用同一份 `~/.claude/settings.json`，因此也会进入这套状态灯逻辑。普通聊天页如果没有启动本地 Agent，则不会产生工具授权等本地生命周期事件。
+当前经过实机验证的设备是广播名为 `JTX-RGB`、由 **Colorful Lights** App 控制的跑马灯。CodeLight 通过 BLE `FFF0` 服务及可写 `FFF3` 特征发送控制帧。其他外观相似的灯可能采用不同协议，接入前需要先确认服务、特征和数据帧。
 
-这里复用了本机已有的 [Ping Island](https://github.com/erha19/ping-island) 对 Claude/Codex hook 事件的接入方式和 session 状态划分；BLE 协议部分针对这台 JTX-RGB 单独完成。
+- [BLE 协议调查](PROTOCOL.md)
+- [固件与充电动画说明](FIRMWARE.md)
+- [桌面端开发说明](desktop-app/README.md)
 
-### 管理命令
+### 隐私
+
+CodeLight 不需要 CodeLight 云端账户。设备连接信息、Provider 设置、事件记录和额度缓存保存在本机。Claude / Codex 的额度查询复用本机已登录会话，凭据只在桌面端主进程内存中短暂使用，不会发送到渲染页面或写入日志。
+
+---
+
+## English
+
+### What is CodeLight?
+
+CodeLight is a macOS and Windows companion for AI-assisted development. It turns events from Claude, Codex, OpenCode, and other coding tools — task completed, approval required, answer required, or failure — into clear physical light signals and native desktop notifications.
+
+The current hardware integration is built and tested for the **JTX-RGB / Colorful Lights** sound-reactive light bar. Your computer maintains the BLE connection directly, so the mobile app does not need to stay open and no CodeLight cloud service is required.
+
+### Light protocol
+
+| Color | Meaning | Default behavior |
+|---|---|---|
+| 🟢 Green | Task or turn completed | Flash briefly, then stay on for 60 seconds |
+| 🟡 Yellow | Approval, permission, or risky action required | Flash, stay on, and turn off after handling |
+| 🔵 Blue | Answer, choice, or more information required | Flash, stay on, and turn off after replying |
+| 🔴 Red | Network, model/API, authentication, rate-limit, or tool failure | Flash, stay on, and turn off after recovery |
+| ⚫ Off | Work is progressing normally, or nothing needs attention | Remain off |
+
+- The default display time is 60 seconds. It can be changed to 10 seconds, 30 seconds, 2 minutes, 5 minutes, or “until handled.”
+- A new event immediately interrupts the current signal and restarts its timer.
+- Events competing for one device use this priority: **red > yellow > blue > green**. The newest event wins within the same priority.
+- Every physical light has its own event queue and timer, so multiple devices operate independently.
+
+### Highlights
+
+- **Physical BLE status lights** — native CoreBluetooth background service on macOS and Electron Web Bluetooth on Windows.
+- **Synchronized desktop notifications** — notifications identify the tool and project; clicking one opens the configured application.
+- **Independent multi-device routing** — manage several JTX-RGB lights, assign stable numbers or aliases, and bind each one to a Provider.
+- **Extensible Provider architecture** — edit names, icons, application paths, dashboard pins, and device bindings from Settings.
+- **Usage dashboards** — Codex primary / Spark limits plus Claude 5-hour, weekly, and Fable 5 quotas.
+- **Persistent event history** — interrupted signals remain available in the app's event log.
+- **Charging-animation suppression** — hides the firmware's four-bar charging animation by default, with a temporary 10-second battery view.
+- **Local-first operation** — BLE control, hooks, and state aggregation run on your computer.
+- **Tray and login startup** — monitoring continues when the main window is hidden.
+
+### Provider presets
+
+CodeLight ships with Provider metadata and brand assets for:
+
+`Claude` · `Codex` · `OpenCode` · `MiMo Code` · `Zed Code` · `Hermes` · `Kilo Code / KCode` · `Gemini CLI` · `Amp` · `Cursor` · `Cline` · `Roo Code` · `Aider` · `Goose` · `Continue` · `Qwen Code` · `Trae` · `Windsurf` · `GitHub Copilot` · `Kiro` · `Kimi` · `OpenHands` · `Antigravity` · `Crush` · `Pi`
+
+Custom Providers can be added from Settings without changing the core state machine. Automatic event ingestion is supplied by per-tool hooks or adapters; local integrations for Claude, Codex, and OpenCode are included.
+
+### Multi-device routing
+
+```text
+Claude ────→ Light A (left side of the desk)
+Codex  ────→ Light B (right side of the desk)
+OpenCode ──→ Light C (shared device)
+              └─ Independent priority, signal, and timer
+```
+
+The dashboard adapts to display between one and eight device cards. Larger setups move into the full device manager. A stable identifier can be generated from each Bluetooth identity, and every device can also be given a human-friendly alias.
+
+### Quick start
+
+#### Requirements
+
+- macOS or Windows 10/11
+- Node.js 22
+- Xcode Command Line Tools / Swift compiler for macOS development
+- A powered-on JTX-RGB / Colorful Lights device nearby
+
+#### Run from source
 
 ```bash
-AGENT_LIGHT="$HOME/.agent-status-light/bin/agent-light-hook"
+git clone https://github.com/wqytommy666/CodeLight.git
+cd CodeLight
 
-$AGENT_LIGHT status
-$AGENT_LIGHT demo yellow       # 爆闪后常亮
-$AGENT_LIGHT off               # 立即清空全部状态并熄灭
-$AGENT_LIGHT charger-silence on
-$AGENT_LIGHT charger-silence off
-$AGENT_LIGHT charge hide       # 默认：隐藏充电/电量动画
-$AGENT_LIGHT charge show 10    # 临时恢复默认动画 10 秒，然后自动隐藏
+# macOS only: compile the native CoreBluetooth service
+./build_daemon.sh
+
+cd desktop-app
+npm ci
+npm run check
+npm start
 ```
 
-该型号在充电时会由固件绘制四格动画。后台控制器利用 App 未开放的零亮度值隐藏它，并约每 0.6 秒低频重申一次；不会再用高频开关灯与固件争抢，因此不会人为制造闪烁。这个选项显示为 `charger_silence=on`。
+On first launch, grant **Bluetooth** and **Notifications** permissions. Open the Devices page to scan for nearby BLE lights and connect directly. CodeLight displays an alert when no device is connected or when an active device disconnects.
 
-底层固件改造的调查和备份/回刷路径见 [FIRMWARE.md](./FIRMWARE.md)。
-
-日志：
+#### Command-line control on macOS
 
 ```bash
-tail -f ~/.agent-status-light/logs/daemon.log
-tail -f ~/.agent-status-light/events.jsonl
+./run.sh scan 15
+./light.sh green
+./light.sh yellow
+./light.sh blue
+./light.sh red
+./light.sh test
+./light.sh off
 ```
 
-协议调查见 [PROTOCOL.md](./PROTOCOL.md)。
+### Build and test
 
-## 桌面控制台
+```bash
+# Backend tests
+python3 -m unittest discover -s tests -v
 
-macOS / Windows 的图形化控制台位于 [`desktop-app`](./desktop-app)。它提供系统通知、通知点击跳转、任意数量跑马灯的独立路由、可配置持续时间、完整事件记录、Provider 管理、四种状态手动测试和充电动画隐藏。首页最多同时展示 8 个设备卡片，更多设备进入完整管理页；Agent 顶栏可自由置顶，未置顶项通过数量入口统一管理。
+# Desktop checks and tests
+cd desktop-app
+npm run check
+
+# macOS DMG + ZIP
+../build_daemon.sh ../.build/agent-light-daemon
+npm run build:mac
+
+# Windows installer + portable executable (run on Windows)
+npm run build:win
+```
+
+Build artifacts are written to `desktop-app/dist/`.
+
+### Hardware and protocol
+
+The verified device currently advertises as `JTX-RGB` and is controlled by the **Colorful Lights** mobile app. CodeLight writes control frames to the BLE `FFF3` characteristic under service `FFF0`. Similar-looking products may use different services or packet formats and should be inspected before use.
+
+- [BLE protocol notes](PROTOCOL.md)
+- [Firmware and charging-animation notes](FIRMWARE.md)
+- [Desktop development guide](desktop-app/README.md)
+
+### Privacy
+
+CodeLight does not require a CodeLight cloud account. Device connections, Provider settings, event history, and cached quota data stay on the local computer. Claude and Codex quota queries reuse existing local sessions; credentials are held briefly in the Electron main-process memory and are never passed to the renderer or written to logs.
+
+---
+
+## Acknowledgements / 致谢
+
+- [Ping Island](https://github.com/erha19/ping-island) — Claude / Codex lifecycle hook and session-state ideas.
+- [CodexBar](https://github.com/steipete/CodexBar) — Codex usage-data source and field-mapping reference.
+
+The JTX-RGB BLE frames, charging-display override, multi-device routing, desktop application, and cross-platform control layer were implemented for CodeLight.<br>
+JTX-RGB 的 BLE 控制帧、充电显示覆盖、多设备路由、桌面应用和跨平台控制层由 CodeLight 项目完成。
+
+## License / 许可证
+
+[MIT](LICENSE) © 2026 wqytommy
