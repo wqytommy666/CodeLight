@@ -390,10 +390,10 @@ function windowIcon() {
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 1120,
-    height: 760,
-    minWidth: 980,
-    minHeight: 680,
+    width: 1180,
+    height: 820,
+    minWidth: 1040,
+    minHeight: 720,
     backgroundColor: '#081018',
     titleBarStyle: isMac ? 'hiddenInset' : 'default',
     icon: windowIcon(),

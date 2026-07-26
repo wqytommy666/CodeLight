@@ -17,6 +17,8 @@
 
 多个任务同时存在时使用 `红 > 黄 > 蓝 > 绿` 的优先级，同级事件以最新事件优先。默认持续 60 秒，也可设置 10/30/120/300 秒或一直亮到手动处理；新事件会立即抢占并重新计时。正常处理中和没有待处理状态时灯保持熄灭。
 
+首页的每张实体灯卡片都带有软件下拉框，直接显示并修改 `状态灯 → Provider` 映射。“一一绑定”会按置顶顺序将 Claude、Codex、OpenCode 等分别分配给第 1、2、3 盏灯；也可在各自卡片中单独调整任意一盏灯。
+
 ## Provider、通知与多设备
 
 CodeLight 内置 Claude、Codex、OpenCode、MiMo Code、Zed Code、Hermes、Kilo/KCode、Gemini CLI、Amp、Cursor、Cline、Roo Code、Aider、Goose、Continue、Qwen Code、Trae、Windsurf 等 Provider。设置页可继续添加任意 Provider，无需修改核心代码。

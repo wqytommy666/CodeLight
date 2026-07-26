@@ -44,6 +44,7 @@ CodeLight 是一个面向 AI 编程工作流的 macOS / Windows 桌面应用。�
 - **实体 BLE 状态灯**：macOS 使用原生 CoreBluetooth 后台服务；Windows 使用 Electron Web Bluetooth。
 - **桌面通知联动**：状态变化时同步发送系统通知，通知包含工具和项目名称；点击可打开对应软件。
 - **多灯独立绑定**：可同时管理多盏 JTX-RGB，为设备自动编号、设置别名，并分别绑定不同 Provider。
+- **首页直接一一绑定**：每张实体灯卡片都显示 `状态灯 → 软件` 下拉框；两盏灯可对应 Claude/Codex，三盏灯可继续对应 OpenCode。也可按置顶 Provider 顺序一键批量完成映射。
 - **可扩展 Provider 架构**：Provider 的名称、图标、软件路径、首页置顶和灯光绑定都可在设置中维护。
 - **Agent 额度看板**：显示 Codex 主额度 / Spark 额度，以及 Claude 5 小时、每周和 Fable 5 等实时额度。
 - **完整事件记录**：即使新事件打断了旧灯光，历史状态仍可在应用内查看。
@@ -68,7 +69,7 @@ OpenCode ──→ 跑马灯 C（共享设备）
               └─ 独立优先级、灯光和倒计时
 ```
 
-首页会根据设备数量自适应展示 1–8 张设备卡片；更多设备进入完整管理页面。设备可以使用蓝牙标识生成稳定编号，也可以设置更容易识别的自定义名称。
+首页会根据设备数量自适应展示最多 6 张设备卡片，并在卡片内直接修改对应软件；更多设备进入完整管理页面。设备可以使用蓝牙标识生成稳定编号，也可以设置更容易识别的自定义名称。
 
 ### 快速开始
 
@@ -170,6 +171,7 @@ The current hardware integration is built and tested for the **JTX-RGB / Colorfu
 - **Physical BLE status lights** — native CoreBluetooth background service on macOS and Electron Web Bluetooth on Windows.
 - **Synchronized desktop notifications** — notifications identify the tool and project; clicking one opens the configured application.
 - **Independent multi-device routing** — manage several JTX-RGB lights, assign stable numbers or aliases, and bind each one to a Provider.
+- **Visible one-to-one mapping** — every light card exposes its `light → app` selector. Two or three lights can map directly to two or three tools, or be assigned in one click using pinned Provider order.
 - **Extensible Provider architecture** — edit names, icons, application paths, dashboard pins, and device bindings from Settings.
 - **Usage dashboards** — Codex primary / Spark limits plus Claude 5-hour, weekly, and Fable 5 quotas.
 - **Persistent event history** — interrupted signals remain available in the app's event log.
@@ -194,7 +196,7 @@ OpenCode ──→ Light C (shared device)
               └─ Independent priority, signal, and timer
 ```
 
-The dashboard adapts to display between one and eight device cards. Larger setups move into the full device manager. A stable identifier can be generated from each Bluetooth identity, and every device can also be given a human-friendly alias.
+The dashboard adapts to display up to six device cards with inline app selectors. Larger setups move into the full device manager. A stable identifier can be generated from each Bluetooth identity, and every device can also be given a human-friendly alias.
 
 ### Quick start
 

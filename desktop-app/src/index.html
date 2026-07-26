@@ -33,11 +33,12 @@
         <article class="panel current-panel" aria-labelledby="currentTitle">
           <div class="panel-heading">
             <div><span class="section-kicker">实体状态灯</span><h2 id="currentTitle">当前状态</h2></div>
-            <span id="backendMode" class="quiet-badge">后台检查中</span>
+            <div class="fleet-heading-badges"><span id="routeBadge" class="route-badge">等待设备路由</span><span id="backendMode" class="quiet-badge">后台检查中</span></div>
           </div>
           <div class="fleet-toolbar">
             <div class="current-row"><strong id="currentState">熄灭</strong><span id="currentReason">没有待处理状态</span></div>
             <div class="hero-actions">
+              <button id="autoRouteButton" class="route-button" type="button" title="按置顶顺序将每盏灯绑定到一个不同的软件">自动一一绑定</button>
               <button id="connectButton" class="primary-button" type="button">连接设备</button>
               <button id="offButton" class="secondary-button" type="button">全部熄灭</button>
             </div>

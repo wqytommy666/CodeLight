@@ -4,8 +4,9 @@
   const $ = (selector) => document.querySelector(selector);
   const elements = {
     connectionBadge: $('#connectionBadge'), backendMode: $('#backendMode'), currentState: $('#currentState'),
-    currentReason: $('#currentReason'), lampFleet: $('#lampFleet'), agentStrip: $('#agentStrip'),
+    currentReason: $('#currentReason'), lampFleet: $('#lampFleet'), agentStrip: $('#agentStrip'), routeBadge: $('#routeBadge'),
     connectButton: $('#connectButton'), offButton: $('#offButton'), chargerToggle: $('#chargerToggle'),
+    autoRouteButton: $('#autoRouteButton'),
     chargerBadge: $('#chargerBadge'), previewCharge: $('#previewCharge'), hookState: $('#hookState'),
     installHooks: $('#installHooks'), eventLog: $('#eventLog'), refreshButton: $('#refreshButton'),
     footerVersion: $('#footerVersion'), hideWindow: $('#hideWindow'), toastRegion: $('#toastRegion'),
@@ -134,12 +135,18 @@
 
   function renderFleet(devices = snapshot?.devices || [], burstDeviceId = '') {
     const enabled = devices.filter((device) => device.enabled !== false);
-    const maximumCards = 8;
+    const maximumCards = 6;
     const hasOverflow = enabled.length > maximumCards;
     const visible = hasOverflow ? enabled.slice(0, maximumCards - 1) : enabled.slice(0, maximumCards);
     const renderedCount = visible.length + (hasOverflow ? 1 : 0);
-    elements.lampFleet.className = `lamp-fleet${renderedCount <= 1 ? ' single' : ''}${renderedCount > 4 ? ' dense' : ''}`;
+    elements.lampFleet.className = `lamp-fleet count-${renderedCount}${renderedCount <= 1 ? ' single' : ''}${renderedCount > 6 ? ' dense' : ''}`;
     elements.lampFleet.dataset.count = String(enabled.length);
+    const specificallyBound = enabled.filter((device) => device.sources?.[0] && device.sources[0] !== '*').length;
+    elements.routeBadge.textContent = enabled.length
+      ? `${enabled.length} 盏灯 · ${specificallyBound}/${enabled.length} 独立绑定`
+      : '等待设备路由';
+    elements.autoRouteButton.disabled = !enabled.length || !(snapshot?.providers || []).some((provider) => provider.enabled !== false);
+    elements.autoRouteButton.textContent = enabled.length > 1 ? `一一绑定 ${enabled.length} 盏` : '绑定软件';
     if (!enabled.length) {
       const empty = document.createElement('div');
       empty.className = 'device-manager-empty';
@@ -171,17 +178,41 @@
       route.className = 'fleet-route';
       const source = device.sources?.[0] || '*';
       const provider = source === '*' ? null : providerFor(source);
+      const routeArrow = document.createElement('span');
+      routeArrow.className = 'fleet-route-arrow';
+      routeArrow.textContent = '→';
       const providerIcon = document.createElement('span');
       providerIcon.className = 'fleet-provider-icon';
       if (provider) renderProviderIcon(providerIcon, provider);
       else providerIcon.textContent = '∞';
-      const routeLabel = document.createElement('small');
-      routeLabel.textContent = `${source === '*' ? '全部 Agent' : provider?.short || provider?.name || source} · ${remainingLabel(device)}`;
-      route.append(providerIcon, routeLabel);
-      copy.append(title, route);
+      const select = document.createElement('select');
+      select.className = 'fleet-route-select';
+      select.setAttribute('aria-label', `设置 ${device.name} 对应的软件`);
+      select.append(providerOptions(source));
+      select.value = source;
+      select.addEventListener('change', async () => {
+        const selected = select.value;
+        select.disabled = true;
+        try {
+          await window.agentLight.saveDevice({ ...device, sources: [selected] });
+          const name = selected === '*' ? '所有软件' : providerFor(selected)?.name || selected;
+          toast(`${device.name} → ${name}`);
+          await refresh();
+        } catch (error) {
+          select.value = source;
+          select.disabled = false;
+          toast(error.message, true);
+        }
+      });
+      route.append(routeArrow, providerIcon, select);
+      const status = document.createElement('small');
+      status.className = 'fleet-state-label';
+      status.textContent = `当前 · ${remainingLabel(device)}`;
+      copy.append(title, route, status);
       const lamp = document.createElement('div');
       lamp.className = 'mini-lamp';
-      lamp.append(...Array.from({ length: 5 }, () => document.createElement('i')));
+      lamp.setAttribute('aria-hidden', 'true');
+      lamp.append(...Array.from({ length: 10 }, () => document.createElement('i')));
       card.append(copy, lamp);
       return card;
     });
@@ -644,7 +675,7 @@
     elements.footerVersion.textContent = `CodeLight v${next.version}`;
     setConnection(next.ble);
     updateConnectionGuard(next);
-    renderFleet(next.devices || []);
+    if (!document.activeElement?.classList?.contains('fleet-route-select')) renderFleet(next.devices || []);
     renderAgentStrip(next);
     elements.chargerToggle.checked = Boolean(next.chargerSilence);
     elements.chargerBadge.textContent = next.chargerSilence ? '充电灯已隐藏' : '充电灯显示中';
@@ -685,6 +716,29 @@
     } catch (error) {
       toast(error.message || String(error), true);
       throw error;
+    }
+  }
+
+  async function autoRouteDevices() {
+    const devices = (snapshot?.devices || []).filter((device) => device.enabled !== false);
+    const enabledProviders = (snapshot?.providers || []).filter((provider) => provider.enabled !== false);
+    const providers = [
+      ...enabledProviders.filter((provider) => provider.pinned),
+      ...enabledProviders.filter((provider) => !provider.pinned),
+    ];
+    if (!devices.length) return toast('请先连接至少一盏状态灯', true);
+    if (providers.length < devices.length) return toast(`只有 ${providers.length} 个已启用软件，无法为 ${devices.length} 盏灯一一绑定`, true);
+    elements.autoRouteButton.disabled = true;
+    try {
+      for (let index = 0; index < devices.length; index += 1) {
+        await window.agentLight.saveDevice({ ...devices[index], sources: [providers[index].id] });
+      }
+      toast(devices.map((device, index) => `${device.name} → ${providers[index].short || providers[index].name}`).join('；'));
+      await refresh();
+    } catch (error) {
+      toast(`一一绑定失败：${error.message}`, true);
+    } finally {
+      elements.autoRouteButton.disabled = false;
     }
   }
 
@@ -1026,6 +1080,7 @@
     showConnectionModal();
     connect();
   });
+  elements.autoRouteButton.addEventListener('click', autoRouteDevices);
   elements.connectionNow.addEventListener('click', connect);
   elements.connectionLater.addEventListener('click', () => hideConnectionModal(true));
   elements.offButton.addEventListener('click', () => command('clear-all', '灯光已熄灭').catch(() => {}));
