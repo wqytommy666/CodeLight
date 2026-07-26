@@ -665,17 +665,24 @@ function updateConnectionGuard(next) {
   const enabled = (next.devices || []).filter((device) => device.enabled !== false);
   const unready = enabled.filter((device) => device.status !== 'ready');
   const droppedDevices = unready.filter((device) => deviceConnectionStates.get(device.id) === 'ready');
+  const newlyUnreadyDevices = unready.filter((device) => !deviceConnectionStates.has(device.id));
   const dropped = droppedDevices.length > 0 || (connectionGuardInitialized && connectionWasReady && !ready);
   for (const device of enabled) deviceConnectionStates.set(device.id, device.status);
   connectionGuardInitialized = true;
   connectionWasReady = ready;
   if (ready) return;
-  if (!firstCheck && !dropped) return;
+  // A device added after startup has no previous "ready" state, so it is not
+  // technically a dropped connection. It still needs the same blocking
+  // connection prompt; otherwise the UI can look configured while the lamp is
+  // just playing its built-in marquee effect and receives no CodeLight frames.
+  if (!firstCheck && !dropped && !newlyUnreadyDevices.length) return;
   const now = Date.now();
   if (now - lastConnectionAlertAt < 10_000) return;
   lastConnectionAlertAt = now;
-  const affected = (droppedDevices.length ? droppedDevices : unready).map((device) => device.name).join('、');
-  const reason = dropped ? '掉线' : '启动时未连接';
+  const affectedDevices = droppedDevices.length ? droppedDevices
+    : newlyUnreadyDevices.length ? newlyUnreadyDevices : unready;
+  const affected = affectedDevices.map((device) => device.name).join('、');
+  const reason = dropped ? '掉线' : newlyUnreadyDevices.length && !firstCheck ? '新设备未连接' : '启动时未连接';
   mainWindow.show();
   mainWindow.focus();
   mainWindow.webContents.send('connection:required', { reason, dropped, devices: affected, at: new Date().toISOString() });

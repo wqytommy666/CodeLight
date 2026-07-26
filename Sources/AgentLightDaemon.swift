@@ -145,6 +145,7 @@ private final class AgentLightDaemon: NSObject, CBCentralManagerDelegate, CBPeri
     private var commandServer: CommandServer?
     private var ready = false
     private var reconnectPending = false
+    private var connectionGeneration: UInt64 = 0
     private var entries: [String: StatusEntry] = [:]
     private var displayedState: LightState = .off
     private var animationGeneration: UInt64 = 0
@@ -406,8 +407,28 @@ private final class AgentLightDaemon: NSObject, CBCentralManagerDelegate, CBPeri
         central.stopScan()
         peripheral = found
         found.delegate = self
+        connectionGeneration &+= 1
+        let generation = connectionGeneration
         log("BLE_CONNECT name=\(found.name ?? "JTX-RGB") id=\(found.identifier.uuidString)")
         central.connect(found, options: nil)
+
+        // CoreBluetooth can leave a pending connection in `.connecting`
+        // indefinitely without calling either didConnect or didFailToConnect.
+        // That made a newly added lamp look configured while it could not
+        // receive any state frames. Recycle the attempt so nearby lamps get a
+        // deterministic reconnect instead of waiting for macOS for hours.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 12) { [weak self, weak found] in
+            guard let self, let found,
+                  self.connectionGeneration == generation,
+                  self.peripheral === found,
+                  !self.ready else { return }
+            log("BLE_CONNECT_TIMEOUT retrying")
+            self.connectionGeneration &+= 1
+            self.peripheral = nil
+            self.writeCharacteristic = nil
+            self.central.cancelPeripheralConnection(found)
+            self.scheduleReconnect()
+        }
     }
 
     private func scheduleReconnect() {
@@ -442,11 +463,13 @@ private final class AgentLightDaemon: NSObject, CBCentralManagerDelegate, CBPeri
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
+        connectionGeneration &+= 1
         log("BLE_CONNECTED")
         peripheral.discoverServices([serviceUUID])
     }
 
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
+        connectionGeneration &+= 1
         log("BLE_CONNECT_FAILED \(error?.localizedDescription ?? "unknown")")
         self.peripheral = nil
         ready = false
@@ -454,6 +477,7 @@ private final class AgentLightDaemon: NSObject, CBCentralManagerDelegate, CBPeri
     }
 
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
+        connectionGeneration &+= 1
         log("BLE_DISCONNECTED \(error?.localizedDescription ?? "normal")")
         self.peripheral = nil
         writeCharacteristic = nil
