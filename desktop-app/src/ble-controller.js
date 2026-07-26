@@ -7,6 +7,7 @@
   const POWER_ON = Uint8Array.from([0xbc, 0x01, 0x01, 0x01, 0x55]);
   const MAX_BRIGHTNESS = Uint8Array.from([0xbc, 0x05, 0x06, 0x03, 0xe8, 0, 0, 0, 0, 0x55]);
   const ZERO_BRIGHTNESS = Uint8Array.from([0xbc, 0x05, 0x06, 0, 0, 0, 0, 0, 0, 0x55]);
+  const STATIC_MODE = Uint8Array.from([0xbc, 0x06, 0x02, 0, 0x93, 0x55]);
   const HUES = { red: 0, yellow: 60, green: 120, blue: 240 };
 
   const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -96,10 +97,12 @@
 
     async write(frame, quiet = false) {
       if (!this.ready || !this.characteristic) return false;
-      if (typeof this.characteristic.writeValueWithoutResponse === 'function') {
-        await this.characteristic.writeValueWithoutResponse(frame);
-      } else {
+      if (typeof this.characteristic.writeValueWithResponse === 'function') {
+        await this.characteristic.writeValueWithResponse(frame);
+      } else if (typeof this.characteristic.writeValue === 'function') {
         await this.characteristic.writeValue(frame);
+      } else {
+        await this.characteristic.writeValueWithoutResponse(frame);
       }
       if (!quiet) this.onLog('BLE 写入', [...frame].map((byte) => byte.toString(16).padStart(2, '0')).join(' ').toUpperCase());
       return true;
@@ -116,11 +119,14 @@
       }
 
       const steps = burst ? [
-        [0, ZERO_BRIGHTNESS], [20, POWER_ON], [40, colorFrame(state)], [60, MAX_BRIGHTNESS],
-        [200, ZERO_BRIGHTNESS], [300, colorFrame(state)], [320, MAX_BRIGHTNESS],
-        [460, ZERO_BRIGHTNESS], [560, colorFrame(state)], [580, MAX_BRIGHTNESS],
-        [720, ZERO_BRIGHTNESS], [820, colorFrame(state)], [840, MAX_BRIGHTNESS],
-      ] : [[0, ZERO_BRIGHTNESS], [20, POWER_ON], [40, colorFrame(state)], [60, MAX_BRIGHTNESS]];
+        [0, ZERO_BRIGHTNESS], [20, POWER_ON], [30, STATIC_MODE], [40, colorFrame(state)], [60, MAX_BRIGHTNESS],
+        [180, ZERO_BRIGHTNESS], [280, colorFrame(state)], [300, MAX_BRIGHTNESS],
+        [420, ZERO_BRIGHTNESS], [520, colorFrame(state)], [540, MAX_BRIGHTNESS],
+        [660, ZERO_BRIGHTNESS], [760, colorFrame(state)], [780, MAX_BRIGHTNESS],
+        [900, ZERO_BRIGHTNESS], [1000, colorFrame(state)], [1020, MAX_BRIGHTNESS],
+        [1140, ZERO_BRIGHTNESS], [1240, colorFrame(state)], [1260, MAX_BRIGHTNESS],
+        [1380, ZERO_BRIGHTNESS], [1480, colorFrame(state)], [1500, MAX_BRIGHTNESS],
+      ] : [[0, ZERO_BRIGHTNESS], [20, POWER_ON], [30, STATIC_MODE], [40, colorFrame(state)], [60, MAX_BRIGHTNESS]];
 
       for (const [delay, frame] of steps) {
         setTimeout(() => {

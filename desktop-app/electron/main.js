@@ -252,9 +252,13 @@ function readHookEvents(limit = 200) {
         if (seen.has(dedupeKey)) return [];
         seen.add(dedupeKey);
         const source = currentProvider(record.source).short;
+        const networkRetry = record.action === 'yellow' && (
+          record.event === 'NetworkRetryWatch'
+          || /network|retry|connection|econn|网络|重试|重连|连接/i.test(String(record.detail || ''))
+        );
         const label = record.action === 'green' ? '任务完成'
-          : record.action === 'yellow' ? '等待授权'
-            : record.action === 'blue' ? '等待回答' : '发生故障';
+          : record.action === 'yellow' ? (networkRetry ? '网络重试' : '需要处理')
+            : record.action === 'blue' ? '需要人工处理' : '发生故障';
         return [{
           id: `hook-${record.timestamp}-${index}`,
           at: record.timestamp,
@@ -326,12 +330,18 @@ function maybeNotify(record, force = false) {
     const cutoff = Date.now() - 60_000;
     for (const [item, at] of notificationDedupe) if (at < cutoff) notificationDedupe.delete(item);
   }
-  const labels = { green: '任务完成', yellow: '等待授权', blue: '需要回答', red: '发生故障' };
+  const networkRetry = record.action === 'yellow' && (
+    record.event === 'NetworkRetryWatch'
+    || /network|retry|connection|econn|网络|重试|重连|连接/i.test(String(record.detail || ''))
+  );
+  const labels = { green: '任务完成', yellow: networkRetry ? '网络重试' : '需要处理', blue: '需要人工处理', red: '发生故障' };
   const action = String(record.action).startsWith('red') ? 'red' : record.action;
   const bodies = {
     green: '任务已经完成。点击回到对应工具。',
-    yellow: '正在等待权限批准或授权。',
-    blue: '需要你的选择、回答或补充输入。',
+    yellow: networkRetry
+      ? (String(record.detail || '').trim() || '网络连接正在重试，请检查或切换网络。')
+      : '正在等待权限批准或授权。',
+    blue: '需要你的回答、选择、审批或授权。',
     red: '网络、认证、额度或工具执行出现故障。',
   };
   const project = String(record.project || '').trim();
@@ -735,7 +745,8 @@ function handleLocalCommand(raw) {
   if (verb === 'activity' && parts[1]) { runtimes.forEach((runtime) => runtime.activity(parts[1])); return `OK activity ${parts[1]}`; }
   if (verb === 'clear-all' || verb === 'off') { runtimes.forEach((runtime) => runtime.clearAll()); return 'OK off'; }
   if (verb === 'demo' && ['green', 'blue', 'yellow', 'red'].includes(parts[1])) {
-    runtimes.forEach((runtime) => runtime.set('manual-demo', parts[1], 3600, true));
+    const seconds = Math.min(300, Math.max(1, Number(parts[2] || 60)));
+    runtimes.forEach((runtime) => runtime.set('manual-demo', parts[1], seconds, true));
     return `OK demo ${parts[1]}`;
   }
   if (verb === 'charger-silence' && ['on', 'off'].includes(parts[1])) {
@@ -1201,8 +1212,8 @@ function registerIPC() {
     if (!['green', 'yellow', 'blue', 'red'].includes(color)) throw new Error('无效颜色');
     const device = settings.devices.find((item) => item.id === id);
     if (!device) throw new Error('设备不存在');
-    if (isMac) return daemonCommand(`demo ${color}`, 900, device.port);
-    windowsRuntimes.get(id)?.set('manual-demo', color, 3600, true);
+    if (isMac) return daemonCommand(`demo ${color} 10`, 900, device.port);
+    windowsRuntimes.get(id)?.set('manual-demo', color, 10, true);
     return 'OK demo';
   });
   ipcMain.handle('settings:update', (_event, patch) => {

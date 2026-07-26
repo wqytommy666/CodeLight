@@ -255,15 +255,55 @@ def definite_failure(value: Any, depth: int = 0) -> bool:
     return False
 
 
+def diagnostic_text(payload: dict[str, Any]) -> str:
+    """Return error metadata without scanning prompts or ordinary tool input."""
+    keys = {
+        "error", "message", "formatted", "reason", "detail", "title",
+        "notification_type", "type", "outcome", "status", "code", "stderr",
+        "exception", "cause",
+    }
+    values: list[str] = []
+
+    def collect(value: Any, include_all: bool = False, depth: int = 0) -> None:
+        if depth > 6:
+            return
+        if isinstance(value, str):
+            if include_all:
+                values.append(value)
+            return
+        if isinstance(value, dict):
+            for key, item in value.items():
+                selected = include_all or str(key).lower().replace("-", "_") in keys
+                if selected:
+                    collect(item, True, depth + 1)
+        elif isinstance(value, list) and include_all:
+            for item in value:
+                collect(item, True, depth + 1)
+
+    collect(payload)
+    return " ".join(values).lower()
+
+
+def network_issue(payload: dict[str, Any]) -> bool:
+    text = diagnostic_text(payload)
+    markers = (
+        "network", "connection", "disconnected", "stream disconnected",
+        "error sending request", "connect to api", "socket", "econn", "dns",
+        "tls", "ssl", "timed out", "timeout", "offline", "unreachable",
+        "网络", "连接", "重连", "超时", "断网",
+    )
+    return any(marker in text for marker in markers)
+
+
 def error_notification(payload: dict[str, Any]) -> bool:
     ntype = first_string(payload, "notification_type", "type").lower()
     if ntype in {"error", "failure", "auth_error", "network_error", "rate_limit"}:
         return True
-    message = first_string(payload, "message", "title").lower()
+    message = diagnostic_text(payload)
     markers = (
-        "network error", "connection failed", "connection lost", "rate limit",
-        "authentication failed", "request failed", "网络错误", "网络连接失败",
-        "连接中断", "认证失败", "请求失败", "额度不足",
+        "rate limit", "authentication failed", "invalid api key", "unauthorized",
+        "network error", "connection failed", "connection lost",
+        "额度不足", "认证失败", "鉴权失败", "网络错误", "网络连接失败", "连接中断",
     )
     return any(marker in message for marker in markers)
 
@@ -364,8 +404,10 @@ def deferred_codex_check(path_text: str, call_id: str, key: str) -> int:
     for delay in (0.06, 0.10, 0.18, 0.30, 0.50):
         time.sleep(delay)
         if codex_transcript_tool_failure(payload):
-            send_event("codex", set_command(key, "red"))
-            log_event("codex", "PostToolUse", key, "", "red-deferred")
+            # A command failure is recoverable working context. The runtime
+            # watcher reports red only if the complete Codex turn ultimately
+            # fails, avoiding a sticky false alarm while Codex is still active.
+            log_event("codex", "PostToolUse", key, "", "activity", "recoverable-tool-failure-deferred")
             return 0
     log_event("codex", "PostToolUse", key, "", "deferred-no-failure")
     return 0
@@ -419,6 +461,9 @@ def process_hook(source: str, payload: dict[str, Any]) -> None:
             # intentionally preserves green while clearing attention states.
             send_event(source, f"activity {key}")
             log_event(source, event, key, tool, "green-preserved")
+        elif network_issue(payload):
+            send_event(source, set_command(key, "yellow"))
+            log_event(source, event, key, tool, "yellow", "网络连接异常，请检查或切换网络")
         elif stop_failure(payload):
             # Absence of Stop alone is not an error: clients frequently close
             # short-lived helper sessions without emitting a Stop hook.
@@ -430,12 +475,10 @@ def process_hook(source: str, payload: dict[str, Any]) -> None:
         return
 
     if event == "PermissionRequest":
-        if is_question_tool(tool):
-            send_event(source, set_command(key, "blue"))
-            log_event(source, event, key, tool, "blue")
-        else:
-            send_event(source, set_command(key, "yellow"))
-            log_event(source, event, key, tool, "yellow")
+        # Questions, choices, approvals and permissions are all normal cases
+        # that require a human decision, so they share the blue state.
+        send_event(source, set_command(key, "blue"))
+        log_event(source, event, key, tool, "blue")
         return
 
     if event == "PreToolUse":
@@ -448,7 +491,20 @@ def process_hook(source: str, payload: dict[str, Any]) -> None:
             log_event(source, event, key, tool, "activity")
         return
 
-    if event in {"PostToolUseFailure", "StopFailure"}:
+    if event == "PostToolUseFailure":
+        # A failed shell/tool call is recoverable and does not mean the agent's
+        # task failed. Claude frequently continues with another tool call.
+        # Network failures are actionable, however, so surface those in yellow.
+        if network_issue(payload):
+            detail = first_string(payload, "reason", "message", "outcome") or "网络重试，请检查或切换网络"
+            send_event(source, set_command(key, "yellow"))
+            log_event(source, event, key, tool, "yellow", detail)
+        else:
+            send_event(source, f"activity {key}")
+            log_event(source, event, key, tool, "activity", "recoverable-tool-failure")
+        return
+
+    if event == "StopFailure":
         send_event(source, set_command(key, "red"))
         log_event(source, event, key, tool, "red", first_string(payload, "reason", "message", "outcome"))
         return
@@ -459,9 +515,13 @@ def process_hook(source: str, payload: dict[str, Any]) -> None:
             or definite_failure(payload.get("tool_result"))
         )
         transcript_failure = source == "codex" and codex_transcript_tool_failure(payload)
-        if direct_failure or transcript_failure:
-            send_event(source, set_command(key, "red"))
-            log_event(source, event, key, tool, "red")
+        if (direct_failure or transcript_failure) and network_issue(payload):
+            send_event(source, set_command(key, "yellow"))
+            log_event(source, event, key, tool, "yellow", "网络重试，请检查或切换网络")
+        elif direct_failure or transcript_failure:
+            # Tool-level failures are working context, not a final task result.
+            send_event(source, f"activity {key}")
+            log_event(source, event, key, tool, "activity", "recoverable-tool-failure")
         elif is_question_tool(tool):
             # AskUserQuestion/request_user_input has just returned, so the
             # outstanding blue attention state is resolved immediately.
@@ -476,12 +536,15 @@ def process_hook(source: str, payload: dict[str, Any]) -> None:
 
     if event == "Notification":
         ntype = first_string(payload, "notification_type", "type").lower()
-        if error_notification(payload):
+        if network_issue(payload):
+            send_event(source, set_command(key, "yellow"))
+            log_event(source, event, key, tool, "yellow", "网络重试，请检查或切换网络")
+        elif error_notification(payload):
             send_event(source, set_command(key, "red"))
             log_event(source, event, key, tool, "red")
         elif ntype in {"permission_prompt", "permission"}:
-            send_event(source, set_command(key, "yellow"))
-            log_event(source, event, key, tool, "yellow")
+            send_event(source, set_command(key, "blue"))
+            log_event(source, event, key, tool, "blue")
         elif ntype in {"idle_prompt", "question", "input_required"}:
             send_event(source, set_command(key, "blue"))
             log_event(source, event, key, tool, "blue")
@@ -495,7 +558,10 @@ def process_hook(source: str, payload: dict[str, Any]) -> None:
         return
 
     if event == "Stop":
-        if stop_failure(payload):
+        if network_issue(payload):
+            send_event(source, set_command(key, "yellow"))
+            log_event(source, event, key, tool, "yellow", "网络连接异常，请检查或切换网络")
+        elif stop_failure(payload):
             send_event(source, set_command(key, "red"))
             log_event(source, event, key, tool, "red")
         else:

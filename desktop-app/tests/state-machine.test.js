@@ -2,15 +2,16 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { mapHookEvent, StatusRuntime, definiteFailure, errorNotification } = require('../shared/state-machine');
+const { mapHookEvent, StatusRuntime, definiteFailure, networkIssue, errorNotification } = require('../shared/state-machine');
 
 const base = { session_id: 'test-session' };
 
 test('maps the agreed Claude/Codex lifecycle states', () => {
   assert.equal(mapHookEvent('codex', { ...base, hook_event_name: 'Stop' }).state, 'green');
-  assert.equal(mapHookEvent('claude', { ...base, hook_event_name: 'PermissionRequest', tool_name: 'Bash' }).state, 'yellow');
+  assert.equal(mapHookEvent('claude', { ...base, hook_event_name: 'PermissionRequest', tool_name: 'Bash' }).state, 'blue');
   assert.equal(mapHookEvent('codex', { ...base, hook_event_name: 'PreToolUse', tool_name: 'request_user_input' }).state, 'blue');
-  assert.equal(mapHookEvent('claude', { ...base, hook_event_name: 'PostToolUseFailure' }).state, 'red');
+  assert.equal(mapHookEvent('claude', { ...base, hook_event_name: 'PostToolUseFailure' }).action, 'activity');
+  assert.equal(mapHookEvent('claude', { ...base, hook_event_name: 'StopFailure' }).state, 'red');
 });
 
 test('does not treat ordinary text containing scary words as a definite failure', () => {
@@ -27,16 +28,25 @@ test('recognizes network, authentication and rate-limit notifications', () => {
   assert.equal(errorNotification({ notification_type: 'idle_prompt' }), false);
 });
 
+test('maps every provider network retry to yellow without treating ordinary tool failure as fatal', () => {
+  const retry = { ...base, hook_event_name: 'PostToolUseFailure', reason: 'Unable to connect to API (ECONNRESET), retrying' };
+  assert.equal(networkIssue(retry), true);
+  assert.equal(mapHookEvent('claude', retry).state, 'yellow');
+  assert.equal(mapHookEvent('codex', retry).state, 'yellow');
+  assert.equal(mapHookEvent('claude', { ...base, hook_event_name: 'PostToolUseFailure', reason: 'command exited 1' }).action, 'activity');
+  assert.equal(mapHookEvent('claude', { ...base, hook_event_name: 'StopFailure', reason: 'fatal' }).state, 'red');
+});
+
 test('priority is red > yellow > blue > green and clear reveals the next state', () => {
   let now = 1_000;
   const runtime = new StatusRuntime({ now: () => now, tickMs: 0 });
   runtime.set('done', 'green', 30);
   now += 1; runtime.set('question', 'blue', 30);
-  now += 1; runtime.set('permission', 'yellow', 30);
+  now += 1; runtime.set('network', 'yellow', 30);
   now += 1; runtime.set('failure', 'red', 30);
   assert.equal(runtime.displayed, 'red');
   runtime.clear('failure'); assert.equal(runtime.displayed, 'yellow');
-  runtime.clear('permission'); assert.equal(runtime.displayed, 'blue');
+  runtime.clear('network'); assert.equal(runtime.displayed, 'blue');
   runtime.clear('question'); assert.equal(runtime.displayed, 'green');
   runtime.close();
 });
@@ -92,7 +102,7 @@ test('a newer lower-priority event does not interrupt an unresolved higher-prior
   const runtime = new StatusRuntime({ now: () => now, tickMs: 0 });
   const displays = [];
   runtime.on('display', (event) => displays.push(event));
-  runtime.applyHook('claude', { session_id: 'failed', hook_event_name: 'PostToolUseFailure' });
+  runtime.applyHook('claude', { session_id: 'failed', hook_event_name: 'StopFailure' });
   now += 1_000;
   runtime.applyHook('codex', { session_id: 'finished', hook_event_name: 'Stop' });
   assert.equal(runtime.displayed, 'red');
@@ -111,8 +121,15 @@ test('SessionEnd without an explicit failure clears instead of reporting a fault
 
 test('SessionEnd with an explicit failure still reports red', () => {
   const runtime = new StatusRuntime({ tickMs: 0 });
-  runtime.applyHook('claude', { session_id: 'failed-session', hook_event_name: 'SessionEnd', reason: 'network_error' });
+  runtime.applyHook('claude', { session_id: 'failed-session', hook_event_name: 'SessionEnd', reason: 'authentication_failed' });
   assert.equal(runtime.displayed, 'red');
+  runtime.close();
+});
+
+test('SessionEnd with a network problem reports yellow', () => {
+  const runtime = new StatusRuntime({ tickMs: 0 });
+  runtime.applyHook('codex', { session_id: 'network-session', hook_event_name: 'SessionEnd', reason: 'stream disconnected before completion' });
+  assert.equal(runtime.displayed, 'yellow');
   runtime.close();
 });
 

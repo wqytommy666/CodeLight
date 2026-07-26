@@ -56,6 +56,11 @@ private let powerOnFrame: [UInt8] = [0xBC, 0x01, 0x01, 0x01, 0x55]
 private let powerOffFrame: [UInt8] = [0xBC, 0x01, 0x01, 0x00, 0x55]
 private let maxBrightnessFrame: [UInt8] = [0xBC, 0x05, 0x06, 0x03, 0xE8, 0x00, 0x00, 0x00, 0x00, 0x55]
 private let zeroBrightnessFrame: [UInt8] = [0xBC, 0x05, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x55]
+// Mode 147 is the firmware's full-strip/static renderer. Newer units can
+// retain their factory flowing renderer even after receiving command 04.
+// Selecting this mode while brightness is zero makes subsequent HSV colors
+// fill the complete strip without exposing the mode's red default color.
+private let staticModeFrame: [UInt8] = [0xBC, 0x06, 0x02, 0x00, 0x93, 0x55]
 
 private func colorFrame(_ state: LightState) -> [UInt8] {
     let hue = state.hue
@@ -295,14 +300,30 @@ private final class AgentLightDaemon: NSObject, CBCentralManagerDelegate, CBPeri
             return "OK off"
         case "demo":
             guard parts.count >= 2, let state = LightState(rawValue: parts[1]), state != .off else {
-                return "ERR usage: demo <green|blue|yellow|red>"
+                return "ERR usage: demo <green|blue|yellow|red> [seconds]"
             }
+            let seconds = min(300, max(1, Double(parts.count >= 3 ? parts[2] : "60") ?? 60))
             let now = Date()
-            // A manual test stays latched until another color/off command so
-            // the UI can be used to verify long-running steady output.
-            entries["manual-demo"] = StatusEntry(state: state, updatedAt: now, expiresAt: now.addingTimeInterval(3600))
+            entries["manual-demo"] = StatusEntry(state: state, updatedAt: now, expiresAt: now.addingTimeInterval(seconds))
             refreshDisplay(force: true)
             return "OK demo \(state.rawValue)"
+        case "raw":
+            // Local diagnostics for firmware variants. This endpoint is bound
+            // to 127.0.0.1 and still validates the captured BC ... 55 frame.
+            let hex = parts.dropFirst().joined()
+            guard hex.count >= 8, hex.count.isMultiple(of: 2),
+                  let bytes = stride(from: 0, to: hex.count, by: 2).reduce(into: Optional<[UInt8]>([]), { result, index in
+                      guard result != nil, let byte = UInt8(hex.dropFirst(index).prefix(2), radix: 16) else {
+                          result = nil
+                          return
+                      }
+                      result?.append(byte)
+                  }),
+                  bytes.first == 0xBC, bytes.last == 0x55 else {
+                return "ERR usage: raw <BC...55 hex frame>"
+            }
+            send(bytes)
+            return "OK raw \(Data(bytes).hexString)"
         default:
             return "ERR unknown command"
         }
@@ -349,7 +370,7 @@ private final class AgentLightDaemon: NSObject, CBCentralManagerDelegate, CBPeri
             return
         }
 
-        // Initial attention burst: three fast flashes, then steady on.
+        // Initial attention burst: six fast flashes, then steady on.
         // Zero-brightness blanks are used instead of power-off/on toggles.
         // Power toggles briefly expose the firmware's white charging frame.
         // Set the target color while brightness is zero, then reveal it.
@@ -358,17 +379,27 @@ private final class AgentLightDaemon: NSObject, CBCentralManagerDelegate, CBPeri
         let actions: [(Double, [UInt8])] = [
             (0.00, zeroBrightnessFrame),
             (0.02, powerOnFrame),
+            (0.03, staticModeFrame),
             (0.04, colorFrame(state)),
             (0.06, maxBrightnessFrame),
-            (0.20, zeroBrightnessFrame),
-            (0.30, colorFrame(state)),
-            (0.32, maxBrightnessFrame),
-            (0.46, zeroBrightnessFrame),
-            (0.56, colorFrame(state)),
-            (0.58, maxBrightnessFrame),
-            (0.72, zeroBrightnessFrame),
-            (0.82, colorFrame(state)),
-            (0.84, maxBrightnessFrame),
+            (0.18, zeroBrightnessFrame),
+            (0.28, colorFrame(state)),
+            (0.30, maxBrightnessFrame),
+            (0.42, zeroBrightnessFrame),
+            (0.52, colorFrame(state)),
+            (0.54, maxBrightnessFrame),
+            (0.66, zeroBrightnessFrame),
+            (0.76, colorFrame(state)),
+            (0.78, maxBrightnessFrame),
+            (0.90, zeroBrightnessFrame),
+            (1.00, colorFrame(state)),
+            (1.02, maxBrightnessFrame),
+            (1.14, zeroBrightnessFrame),
+            (1.24, colorFrame(state)),
+            (1.26, maxBrightnessFrame),
+            (1.38, zeroBrightnessFrame),
+            (1.48, colorFrame(state)),
+            (1.50, maxBrightnessFrame),
         ]
 
         for (delay, frame) in actions {
@@ -386,11 +417,20 @@ private final class AgentLightDaemon: NSObject, CBCentralManagerDelegate, CBPeri
 
     private func send(_ bytes: [UInt8], quiet: Bool = false) {
         guard ready, let peripheral, let characteristic = writeCharacteristic else { return }
-        let type: CBCharacteristicWriteType = characteristic.properties.contains(.writeWithoutResponse)
-            ? .withoutResponse
-            : .withResponse
+        // The official Colorful Lights client uses acknowledged GATT writes.
+        // Some newer JTX-RGB firmware advertises both write modes but silently
+        // drops bursts sent with writeWithoutResponse, leaving its factory
+        // flowing animation active. Prefer the reliable acknowledged channel
+        // and only fall back when the characteristic truly lacks `.write`.
+        let type: CBCharacteristicWriteType = characteristic.properties.contains(.write)
+            ? .withResponse
+            : .withoutResponse
         peripheral.writeValue(Data(bytes), for: characteristic, type: type)
         if !quiet { log("BLE_WRITE \(Data(bytes).hexString)") }
+    }
+
+    func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
+        if let error { log("BLE_WRITE_ERROR \(error.localizedDescription)") }
     }
 
     private func connectKnownPeripheral() {

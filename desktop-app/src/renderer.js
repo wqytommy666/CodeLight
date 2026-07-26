@@ -31,10 +31,10 @@
     fullEventLog: $('#fullEventLog'), refreshFullEvents: $('#refreshFullEvents'),
   };
 
-  const stateLabels = { off: '熄灭', green: '任务完成', yellow: '等待授权', blue: '等待回答', red: '发生故障' };
+  const stateLabels = { off: '熄灭', green: '任务完成', yellow: '网络重试', blue: '需要人工处理', red: '发生故障' };
   const stateReasons = {
-    off: '没有待处理状态', green: '完成状态持续显示，新事件会重新计时', yellow: '需要选择或批准权限',
-    blue: '等待你的回答', red: '网络、认证、限流或工具失败',
+    off: '没有待处理状态', green: '完成状态持续显示，新事件会重新计时', yellow: 'Agent 正在重试网络，请检查或切换网络',
+    blue: '等待回答、选择、审批或授权', red: '最终任务、认证或额度故障',
   };
   const query = new URLSearchParams(location.search);
   let snapshot = null;

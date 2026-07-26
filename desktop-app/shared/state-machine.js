@@ -51,14 +51,52 @@ function definiteFailure(value, depth = 0) {
   return false;
 }
 
+function diagnosticText(payload) {
+  const keys = new Set([
+    'error', 'message', 'formatted', 'reason', 'detail', 'title',
+    'notification_type', 'type', 'outcome', 'status', 'code', 'stderr',
+    'exception', 'cause',
+  ]);
+  const values = [];
+  function collect(value, includeAll = false, depth = 0) {
+    if (depth > 6 || value == null) return;
+    if (typeof value === 'string') {
+      if (includeAll) values.push(value);
+      return;
+    }
+    if (Array.isArray(value)) {
+      if (includeAll) value.forEach((item) => collect(item, true, depth + 1));
+      return;
+    }
+    if (typeof value === 'object') {
+      for (const [rawKey, item] of Object.entries(value)) {
+        const selected = includeAll || keys.has(rawKey.toLowerCase().replaceAll('-', '_'));
+        if (selected) collect(item, true, depth + 1);
+      }
+    }
+  }
+  collect(payload);
+  return values.join(' ').toLowerCase();
+}
+
+function networkIssue(payload) {
+  const text = diagnosticText(payload);
+  return [
+    'network', 'connection', 'disconnected', 'stream disconnected',
+    'error sending request', 'connect to api', 'socket', 'econn', 'dns',
+    'tls', 'ssl', 'timed out', 'timeout', 'offline', 'unreachable',
+    '网络', '连接', '重连', '超时', '断网',
+  ].some((marker) => text.includes(marker));
+}
+
 function errorNotification(payload) {
   const type = firstString(payload, 'notification_type', 'type').toLowerCase();
   if (['error', 'failure', 'auth_error', 'network_error', 'rate_limit'].includes(type)) return true;
-  const message = firstString(payload, 'message', 'title').toLowerCase();
+  const message = diagnosticText(payload);
   return [
-    'network error', 'connection failed', 'connection lost', 'rate limit',
-    'authentication failed', 'request failed', '网络错误', '网络连接失败',
-    '连接中断', '认证失败', '请求失败', '额度不足',
+    'rate limit', 'authentication failed', 'invalid api key', 'unauthorized',
+    'network error', 'connection failed', 'connection lost',
+    '额度不足', '认证失败', '鉴权失败', '网络错误', '网络连接失败', '连接中断',
   ].some((marker) => message.includes(marker));
 }
 
@@ -71,6 +109,7 @@ function mapHookEvent(source, payload, { durationSeconds = 60 } = {}) {
 
   if (['SessionStart', 'UserPromptSubmit'].includes(event)) return { ...result, action: 'activity' };
   if (event === 'SessionEnd') {
+    if (networkIssue(payload)) return { ...result, action: 'set', state: 'yellow', ttl, force: true, detail: '网络连接异常，请检查或切换网络' };
     const reason = firstString(payload, 'reason', 'outcome').toLowerCase();
     const failed = definiteFailure(payload) || [
       'error', 'failed', 'failure', 'timeout', 'timed_out', 'network',
@@ -78,24 +117,40 @@ function mapHookEvent(source, payload, { durationSeconds = 60 } = {}) {
     ].some((marker) => reason.includes(marker));
     return { ...result, action: 'session-end', failed, ttl, force: true };
   }
-  if (event === 'PermissionRequest') return { ...result, action: 'set', state: isQuestionTool(tool) ? 'blue' : 'yellow', ttl, force: true };
+  if (event === 'PermissionRequest') return { ...result, action: 'set', state: 'blue', ttl, force: true };
   if (event === 'PreToolUse') {
     return isQuestionTool(tool)
       ? { ...result, action: 'set', state: 'blue', ttl, force: true }
       : { ...result, action: 'activity' };
   }
-  if (['PostToolUseFailure', 'StopFailure'].includes(event)) return { ...result, action: 'set', state: 'red', ttl, force: true };
+  if (event === 'PostToolUseFailure') {
+    return networkIssue(payload)
+      ? { ...result, action: 'set', state: 'yellow', ttl, force: true, detail: '网络重试，请检查或切换网络' }
+      : { ...result, action: 'activity' };
+  }
+  if (event === 'StopFailure') return { ...result, action: 'set', state: 'red', ttl, force: true };
   if (event === 'PostToolUse') {
     const failed = definiteFailure(payload.tool_response) || definiteFailure(payload.tool_result);
-    return failed ? { ...result, action: 'set', state: 'red', ttl, force: true } : { ...result, action: 'activity' };
+    if (failed && networkIssue(payload)) return { ...result, action: 'set', state: 'yellow', ttl, force: true, detail: '网络重试，请检查或切换网络' };
+    return { ...result, action: 'activity' };
   }
   if (event === 'Notification') {
     const type = firstString(payload, 'notification_type', 'type').toLowerCase();
+    if (networkIssue(payload)) return { ...result, action: 'set', state: 'yellow', ttl, force: true, detail: '网络重试，请检查或切换网络' };
     if (errorNotification(payload)) return { ...result, action: 'set', state: 'red', ttl, force: true };
-    if (['permission_prompt', 'permission'].includes(type)) return { ...result, action: 'set', state: 'yellow', ttl, force: true };
+    if (['permission_prompt', 'permission'].includes(type)) return { ...result, action: 'set', state: 'blue', ttl, force: true };
     if (['idle_prompt', 'question', 'input_required'].includes(type)) return { ...result, action: 'set', state: 'blue', ttl, force: true };
   }
-  if (event === 'Stop') return { ...result, action: 'set', state: 'green', ttl, force: true };
+  if (event === 'Stop') {
+    if (networkIssue(payload)) return { ...result, action: 'set', state: 'yellow', ttl, force: true, detail: '网络连接异常，请检查或切换网络' };
+    const reason = firstString(payload, 'reason', 'stop_reason', 'outcome').toLowerCase();
+    const failed = definiteFailure(payload) || [
+      'error', 'failed', 'failure', 'rate_limit', 'rate limit', 'auth', 'overloaded',
+    ].some((marker) => reason.includes(marker));
+    return failed
+      ? { ...result, action: 'set', state: 'red', ttl, force: true }
+      : { ...result, action: 'set', state: 'green', ttl, force: true };
+  }
   return result;
 }
 
@@ -202,5 +257,5 @@ class StatusRuntime extends EventEmitter {
 
 module.exports = {
   PRIORITY, VALID_STATES, sessionKey, normalizedTool, isQuestionTool,
-  definiteFailure, errorNotification, mapHookEvent, StatusRuntime,
+  definiteFailure, diagnosticText, networkIssue, errorNotification, mapHookEvent, StatusRuntime,
 };

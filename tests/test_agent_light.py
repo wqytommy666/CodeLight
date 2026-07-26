@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import pathlib
 import json
+import os
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -21,14 +22,14 @@ WATCH_SPEC.loader.exec_module(status_watch)
 
 
 class AgentLightHookTests(unittest.TestCase):
-    def command_for(self, payload: dict) -> str:
+    def command_for(self, payload: dict, source: str = "codex") -> str:
         commands: list[str] = []
         with patch.object(agent_light, "send_event", side_effect=lambda _source, command: commands.append(command)), \
              patch.object(agent_light, "configured_ttl", return_value=60), \
              patch.object(agent_light, "log_event"), \
              patch.object(agent_light, "mark_completed"), \
              patch.object(agent_light, "reset_completion_marker"):
-            agent_light.process_hook("codex", {"session_id": "test", **payload})
+            agent_light.process_hook(source, {"session_id": "test", **payload})
         self.assertEqual(len(commands), 1)
         return commands[0]
 
@@ -43,8 +44,14 @@ class AgentLightHookTests(unittest.TestCase):
 
     def test_failed_stop_is_red(self) -> None:
         self.assertRegex(
-            self.command_for({"hook_event_name": "Stop", "reason": "network_error"}),
+            self.command_for({"hook_event_name": "Stop", "reason": "authentication_failed"}),
             r" red 60 force$",
+        )
+
+    def test_network_stop_is_yellow(self) -> None:
+        self.assertRegex(
+            self.command_for({"hook_event_name": "Stop", "reason": "network_error"}),
+            r" yellow 60 force$",
         )
 
     def test_user_interruption_is_not_a_failure(self) -> None:
@@ -57,10 +64,17 @@ class AgentLightHookTests(unittest.TestCase):
                 r"^clear codex-",
             )
 
-    def test_session_end_with_explicit_failure_is_red(self) -> None:
+    def test_session_end_with_network_failure_is_yellow(self) -> None:
         with patch.object(agent_light, "recently_completed", return_value=False):
             self.assertRegex(
                 self.command_for({"hook_event_name": "SessionEnd", "reason": "network_error"}),
+                r" yellow 60 force$",
+            )
+
+    def test_session_end_with_auth_failure_is_red(self) -> None:
+        with patch.object(agent_light, "recently_completed", return_value=False):
+            self.assertRegex(
+                self.command_for({"hook_event_name": "SessionEnd", "reason": "authentication_failed"}),
                 r" red 60 force$",
             )
 
@@ -81,7 +95,7 @@ class AgentLightHookTests(unittest.TestCase):
     def test_permission_and_question_are_distinct(self) -> None:
         self.assertRegex(
             self.command_for({"hook_event_name": "PermissionRequest", "tool_name": "Bash"}),
-            r" yellow 60 force$",
+            r" blue 60 force$",
         )
         self.assertRegex(
             self.command_for({"hook_event_name": "PreToolUse", "tool_name": "request_user_input"}),
@@ -98,6 +112,28 @@ class AgentLightHookTests(unittest.TestCase):
         self.assertFalse(agent_light.definite_failure({"status_code": 200}))
         self.assertTrue(agent_light.definite_failure({"status_code": 503}))
         self.assertTrue(agent_light.definite_failure({"exit_code": 2}))
+
+    def test_recoverable_tool_failure_does_not_turn_red(self) -> None:
+        self.assertRegex(
+            self.command_for({"hook_event_name": "PostToolUseFailure", "tool_name": "Bash"}, "claude"),
+            r"^activity claude-",
+        )
+
+    def test_claude_network_tool_failure_is_yellow(self) -> None:
+        self.assertRegex(
+            self.command_for({
+                "hook_event_name": "PostToolUseFailure",
+                "tool_name": "Bash",
+                "reason": "Connection error ECONNRESET; retrying",
+            }, "claude"),
+            r" yellow 60 force$",
+        )
+
+    def test_stop_failure_is_still_red(self) -> None:
+        self.assertRegex(
+            self.command_for({"hook_event_name": "StopFailure", "reason": "fatal"}, "claude"),
+            r" red 60 force$",
+        )
 
     def test_codex_transcript_recovers_omitted_exit_code(self) -> None:
         sessions = pathlib.Path.home() / ".codex" / "sessions"
@@ -128,13 +164,46 @@ class AgentLightHookTests(unittest.TestCase):
                 "error": {"message": "network failed", "codex_error_info": "network"},
             },
         })
-        self.assertEqual(decision, ("red", "network"))
+        self.assertEqual(decision, ("yellow", "network failed"))
+
+    def test_runtime_watch_detects_exact_codex_stream_disconnect(self) -> None:
+        message = "stream disconnected before completion: error sending request for url (https://chatgpt.com/backend-api/codex/responses)"
+        self.assertEqual(
+            status_watch.classify_record({
+                "type": "event_msg",
+                "payload": {"type": "task_complete", "error": {"message": message, "codex_error_info": "other"}},
+            }),
+            ("yellow", message),
+        )
+
+    def test_runtime_watch_keeps_non_network_failure_red(self) -> None:
+        self.assertEqual(
+            status_watch.classify_record({
+                "type": "event_msg",
+                "payload": {"type": "task_complete", "error": {"message": "unauthorized", "codex_error_info": "unauthorized"}},
+            }),
+            ("red", "unauthorized"),
+        )
 
     def test_runtime_watch_clears_on_recovery(self) -> None:
         self.assertEqual(
             status_watch.classify_record({"type": "event_msg", "payload": {"type": "task_started"}}),
             ("reset", "task_started"),
         )
+
+    def test_runtime_watch_discovers_old_folder_when_rollout_is_still_active(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            old_folder = root / "2026" / "06" / "01"
+            old_folder.mkdir(parents=True)
+            active = old_folder / "rollout-active.jsonl"
+            active.write_text("{}\n")
+            os.utime(active, (995.0, 995.0))
+            with patch.object(status_watch, "CODEX_SESSIONS_ROOT", root), \
+                 patch.object(status_watch.time, "time", return_value=1_000.0):
+                # The folder date is irrelevant; a recent mtime keeps a
+                # long-running task observable.
+                self.assertIn(active, status_watch.watched_paths(max_age=60))
 
     def test_runtime_watch_reset_does_not_erase_completion_green(self) -> None:
         commands: list[str] = []
@@ -149,11 +218,54 @@ class AgentLightHookTests(unittest.TestCase):
             ("green", "task_complete"),
         )
 
-    def test_network_notification_is_red(self) -> None:
+    def test_network_notification_is_yellow_for_every_provider(self) -> None:
         self.assertRegex(
             self.command_for({"hook_event_name": "Notification", "notification_type": "network_error"}),
-            r" red 60 force$",
+            r" yellow 60 force$",
         )
+
+    def test_claude_network_notification_is_yellow(self) -> None:
+        self.assertRegex(
+            self.command_for({"hook_event_name": "Notification", "notification_type": "network_error"}, "claude"),
+            r" yellow 60 force$",
+        )
+
+    def test_claude_transcript_network_retry_is_yellow(self) -> None:
+        decision = status_watch.classify_claude_record({
+            "type": "system",
+            "subtype": "api_error",
+            "source": "request_retry",
+            "retryInMs": 4000,
+            "retryAttempt": 2,
+            "maxRetries": 10,
+            "sessionId": "claude-session",
+            "error": {
+                "formatted": "Unable to connect to API (ECONNRESET)",
+                "connection": {"code": "ECONNRESET"},
+            },
+        })
+        self.assertIsNotNone(decision)
+        assert decision is not None
+        self.assertEqual(decision[0], "yellow")
+        self.assertEqual(decision[2], "claude-session")
+
+    def test_claude_response_clears_network_retry(self) -> None:
+        self.assertEqual(
+            status_watch.classify_claude_record({"type": "assistant", "sessionId": "claude-session"}),
+            ("reset", "network-recovered", "claude-session"),
+        )
+
+    def test_repeated_codex_retry_refreshes_without_replaying_burst(self) -> None:
+        commands: list[str] = []
+        status_watch.CODEX_NETWORK_ACTIVE = False
+        status_watch.CODEX_NETWORK_ALERT_AT = 0.0
+        with patch.object(status_watch, "send", side_effect=lambda command: commands.append(command) or True), \
+             patch.object(status_watch, "log_action") as logged:
+            status_watch.apply_action("yellow", "stream disconnected")
+            status_watch.apply_action("yellow", "stream disconnected")
+        self.assertEqual(commands.count(f"set {status_watch.ERROR_KEY} yellow 60"), 2)
+        self.assertFalse(any(command.endswith(" force") for command in commands))
+        self.assertEqual(logged.call_count, 1)
 
     def test_disabled_provider_has_no_physical_routes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

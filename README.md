@@ -20,7 +20,7 @@
 
 ### CodeLight 是什么？
 
-CodeLight 是一个面向 AI 编程工作流的 macOS / Windows 桌面应用。它把 Claude、Codex、OpenCode 等工具的“任务完成、等待授权、等待回答、运行故障”转换成直观的实体灯光和系统通知，让你不必反复切换窗口查看任务是否需要处理。
+CodeLight 是一个面向 AI 编程工作流的 macOS / Windows 桌面应用。它把 Claude、Codex、OpenCode 等工具的“任务完成、需要人工处理、网络重试、最终故障”转换成直观的实体灯光和系统通知，让你不必反复切换窗口查看任务是否需要处理。
 
 项目目前针对 **JTX-RGB / Colorful Lights** 拾音跑马灯完成了实机 BLE 协议适配。连接由电脑直接维护，日常使用不需要保持手机 App 开启，也不依赖云端服务。
 
@@ -29,9 +29,9 @@ CodeLight 是一个面向 AI 编程工作流的 macOS / Windows 桌面应用。�
 | 颜色 | 状态 | 默认行为 |
 |---|---|---|
 | 🟢 绿色 | 任务或当前回合完成 | 快速闪烁后常亮 60 秒 |
-| 🟡 黄色 | 等待授权、权限或高风险操作确认 | 快速闪烁后常亮，处理后熄灭 |
-| 🔵 蓝色 | 等待回答、选择或补充信息 | 快速闪烁后常亮，回复后熄灭 |
-| 🔴 红色 | 网络、模型/API、认证、限流或工具故障 | 快速闪烁后常亮，恢复后熄灭 |
+| 🟡 黄色 | 任一 Agent 网络重试，需要检查或切换网络 | 快速闪烁后常亮，网络恢复后熄灭 |
+| 🔵 蓝色 | 等待回答、选择、审批、授权或补充信息 | 快速闪烁后常亮，处理后熄灭 |
+| 🔴 红色 | 最终任务、模型/API、认证或额度故障 | 快速闪烁后常亮，恢复后熄灭 |
 | ⚫ 熄灭 | 正在正常执行，或没有待处理事件 | 保持熄灭 |
 
 - 默认亮灯时间为 60 秒，可选择 10 秒、30 秒、2 分钟、5 分钟或一直亮到手动处理。
@@ -146,7 +146,7 @@ CodeLight 不需要 CodeLight 云端账户。设备连接信息、Provider 设�
 
 ### What is CodeLight?
 
-CodeLight is a macOS and Windows companion for AI-assisted development. It turns events from Claude, Codex, OpenCode, and other coding tools — task completed, approval required, answer required, or failure — into clear physical light signals and native desktop notifications.
+CodeLight is a macOS and Windows companion for AI-assisted development. It turns events from Claude, Codex, OpenCode, and other coding tools — task completed, human action required, network retry, or terminal failure — into clear physical light signals and native desktop notifications.
 
 The current hardware integration is built and tested for the **JTX-RGB / Colorful Lights** sound-reactive light bar. Your computer maintains the BLE connection directly, so the mobile app does not need to stay open and no CodeLight cloud service is required.
 
@@ -154,10 +154,10 @@ The current hardware integration is built and tested for the **JTX-RGB / Colorfu
 
 | Color | Meaning | Default behavior |
 |---|---|---|
-| 🟢 Green | Task or turn completed | Flash briefly, then stay on for 60 seconds |
-| 🟡 Yellow | Approval, permission, or risky action required | Flash, stay on, and turn off after handling |
-| 🔵 Blue | Answer, choice, or more information required | Flash, stay on, and turn off after replying |
-| 🔴 Red | Network, model/API, authentication, rate-limit, or tool failure | Flash, stay on, and turn off after recovery |
+| 🟢 Green | Task or turn completed | Flash six times, then stay on for 60 seconds |
+| 🟡 Yellow | An agent is retrying the network; check or switch networks | Flash, stay on, and turn off after recovery |
+| 🔵 Blue | Answer, choice, approval, permission, or more information required | Flash, stay on, and turn off after handling |
+| 🔴 Red | Final task, model/API, authentication, quota, or fatal failure | Flash, stay on, and turn off after recovery |
 | ⚫ Off | Work is progressing normally, or nothing needs attention | Remain off |
 
 - The default display time is 60 seconds. It can be changed to 10 seconds, 30 seconds, 2 minutes, 5 minutes, or “until handled.”
