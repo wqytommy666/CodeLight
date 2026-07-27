@@ -61,3 +61,13 @@ test('disabled provider does not route events to a lamp', () => {
   });
   assert.deepEqual(devicesForSource(settings, 'codex'), []);
 });
+
+test('a released lamp keeps its provider binding but no longer receives events', () => {
+  const settings = normalizeSettings({
+    providers: [{ id: 'claude', name: 'Claude' }],
+    devices: [{ id: 'lamp-a', name: 'Claude 灯', enabled: false, sources: ['claude'] }],
+  });
+  assert.equal(settings.devices[0].enabled, false);
+  assert.deepEqual(settings.devices[0].sources, ['claude']);
+  assert.deepEqual(devicesForSource(settings, 'claude'), []);
+});

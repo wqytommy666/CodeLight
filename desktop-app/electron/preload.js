@@ -8,8 +8,11 @@ contextBridge.exposeInMainWorld('agentLight', {
   installHooks: () => ipcRenderer.invoke('hooks:install'),
   refreshQuota: () => ipcRenderer.invoke('quota:refresh'),
   scanDevices: () => ipcRenderer.invoke('devices:scan'),
+  selectBluetoothDevice: (id) => ipcRenderer.invoke('bluetooth:select', id),
+  cancelBluetoothSelection: () => ipcRenderer.invoke('bluetooth:cancel'),
   saveDevice: (device) => ipcRenderer.invoke('devices:save', device),
   removeDevice: (id) => ipcRenderer.invoke('devices:remove', id),
+  releaseDevice: (id) => ipcRenderer.invoke('devices:release', id),
   testDevice: (id, color) => ipcRenderer.invoke('devices:test', { id, color }),
   updateSettings: (patch) => ipcRenderer.invoke('settings:update', patch),
   chooseProviderIcon: () => ipcRenderer.invoke('files:choose-icon'),
@@ -43,5 +46,15 @@ contextBridge.exposeInMainWorld('agentLight', {
     const listener = (_event, value) => callback(value);
     ipcRenderer.on('charger:mode', listener);
     return () => ipcRenderer.removeListener('charger:mode', listener);
+  },
+  onBluetoothCandidates: (callback) => {
+    const listener = (_event, value) => callback(value);
+    ipcRenderer.on('bluetooth:candidates', listener);
+    return () => ipcRenderer.removeListener('bluetooth:candidates', listener);
+  },
+  onBluetoothSelectionFinished: (callback) => {
+    const listener = (_event, value) => callback(value);
+    ipcRenderer.on('bluetooth:selection-finished', listener);
+    return () => ipcRenderer.removeListener('bluetooth:selection-finished', listener);
   },
 });

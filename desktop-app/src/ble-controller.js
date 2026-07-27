@@ -1,8 +1,8 @@
 'use strict';
 
 (() => {
-  const SERVICE_UUID = 0xfff0;
-  const WRITE_UUID = 0xfff3;
+  const SERVICE_UUID = '0000fff0-0000-1000-8000-00805f9b34fb';
+  const WRITE_UUID = '0000fff3-0000-1000-8000-00805f9b34fb';
   const POWER_OFF = Uint8Array.from([0xbc, 0x01, 0x01, 0x00, 0x55]);
   const POWER_ON = Uint8Array.from([0xbc, 0x01, 0x01, 0x01, 0x55]);
   const MAX_BRIGHTNESS = Uint8Array.from([0xbc, 0x05, 0x06, 0x03, 0xe8, 0, 0, 0, 0, 0x55]);
@@ -33,6 +33,7 @@
       this.characteristic = null;
       this.ready = false;
       this.generation = 0;
+      this.connectionGeneration = 0;
       this.desiredState = 'off';
       this.chargerSilence = true;
       this.silenceTimer = setInterval(() => {
@@ -54,37 +55,87 @@
       if (!remembered) return false;
       this.device = remembered;
       this.preferredDeviceId = remembered.id;
-      return this.connectDevice();
+      return this.connect(false);
     }
 
-    async connect(requestPermission = true) {
+    async connect(requestPermission = true, forceSelection = false) {
       if (!navigator.bluetooth) throw new Error('当前系统没有提供 Web Bluetooth');
-      if (this.ready) return true;
+      if (this.ready && !forceSelection) return true;
+      const connectionGeneration = ++this.connectionGeneration;
+      if (forceSelection) {
+        ++this.generation;
+        this.ready = false;
+        this.characteristic = null;
+        const previousDevice = this.device;
+        if (previousDevice && this.disconnected) previousDevice.removeEventListener('gattserverdisconnected', this.disconnected);
+        this.device = null;
+        if (previousDevice?.gatt?.connected) previousDevice.gatt.disconnect();
+      }
       if (!this.device && requestPermission) {
-        this.status('selecting', '请选择 JTX-RGB');
+        this.status('selecting', '正在搜索 JTX-RGB，请在 CodeLight 中点击设备');
         this.device = await navigator.bluetooth.requestDevice({
-          filters: [{ namePrefix: 'JTX-RGB' }],
+          // Some units advertise as lowercase `jtx-rgb`. Electron's namePrefix
+          // filter is case-sensitive, so let the main process filter safely.
+          acceptAllDevices: true,
           optionalServices: [SERVICE_UUID],
         });
         this.preferredDeviceId = this.device.id;
       }
       if (!this.device) return false;
-      return this.connectDevice();
+      return this.connectDevice(connectionGeneration);
     }
 
-    async connectDevice() {
+    async connectDevice(connectionGeneration = this.connectionGeneration) {
       this.status('connecting', '正在打开 FFF0/FFF3 控制通道');
-      this.device.removeEventListener('gattserverdisconnected', this.disconnected);
+      const connectingDevice = this.device;
+      if (this.disconnected) connectingDevice.removeEventListener('gattserverdisconnected', this.disconnected);
+      let lastError = null;
+      let lastStage = 'gatt';
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        try {
+          lastStage = 'gatt';
+          const server = await connectingDevice.gatt.connect();
+          lastStage = 'service';
+          const service = await server.getPrimaryService(SERVICE_UUID);
+          lastStage = 'characteristic';
+          this.characteristic = await service.getCharacteristic(WRITE_UUID);
+          lastError = null;
+          break;
+        } catch (error) {
+          if (connectionGeneration !== this.connectionGeneration || connectingDevice !== this.device) {
+            throw new Error('连接请求已被新的设备选择替代');
+          }
+          lastError = error;
+          this.characteristic = null;
+          if (connectingDevice.gatt?.connected) connectingDevice.gatt.disconnect();
+          if (attempt < 3) {
+            this.status('connecting', `Windows GATT 第 ${attempt} 次连接失败，正在重试`);
+            await wait(700 * attempt);
+          }
+        }
+      }
+      if (lastError || !this.characteristic) {
+        const detail = lastStage === 'service'
+          ? '已找到设备，但没有 FFF0 控制服务'
+          : lastStage === 'characteristic'
+            ? '已找到 FFF0，但没有 FFF3 写入通道'
+            : 'Windows 无法建立 GATT 连接；请关闭手机 Colorful Lights 后重试';
+        this.status('error', detail);
+        throw new Error(`${detail}${lastError?.message ? `（${lastError.message}）` : ''}`);
+      }
+      if (connectionGeneration !== this.connectionGeneration || connectingDevice !== this.device) {
+        throw new Error('连接请求已被新的设备选择替代');
+      }
       this.disconnected = () => {
+        if (this.device !== connectingDevice) return;
         this.ready = false;
         this.characteristic = null;
         this.status('disconnected', '连接中断，3 秒后自动重连');
-        setTimeout(() => this.connect(false).catch(() => {}), 3000);
+        setTimeout(() => {
+          if (this.device === connectingDevice && !this.ready) this.connect(false).catch(() => {});
+        }, 3000);
       };
-      this.device.addEventListener('gattserverdisconnected', this.disconnected);
-      const server = await this.device.gatt.connect();
-      const service = await server.getPrimaryService(SERVICE_UUID);
-      this.characteristic = await service.getCharacteristic(WRITE_UUID);
+      connectingDevice.addEventListener('gattserverdisconnected', this.disconnected);
       // The lamp accepts GATT writes before its command parser is ready, but
       // silently drops them. The observed firmware needs about 1.5 seconds.
       await wait(1500);
@@ -97,12 +148,17 @@
 
     async write(frame, quiet = false) {
       if (!this.ready || !this.characteristic) return false;
-      if (typeof this.characteristic.writeValueWithResponse === 'function') {
+      const properties = this.characteristic.properties || {};
+      if (properties.write && typeof this.characteristic.writeValueWithResponse === 'function') {
         await this.characteristic.writeValueWithResponse(frame);
+      } else if (properties.writeWithoutResponse && typeof this.characteristic.writeValueWithoutResponse === 'function') {
+        await this.characteristic.writeValueWithoutResponse(frame);
       } else if (typeof this.characteristic.writeValue === 'function') {
         await this.characteristic.writeValue(frame);
-      } else {
+      } else if (typeof this.characteristic.writeValueWithoutResponse === 'function') {
         await this.characteristic.writeValueWithoutResponse(frame);
+      } else {
+        throw new Error('FFF3 特征不可写');
       }
       if (!quiet) this.onLog('BLE 写入', [...frame].map((byte) => byte.toString(16).padStart(2, '0')).join(' ').toUpperCase());
       return true;
@@ -147,7 +203,12 @@
     close() {
       clearInterval(this.silenceTimer);
       ++this.generation;
-      this.device?.gatt?.disconnect();
+      ++this.connectionGeneration;
+      const device = this.device;
+      if (device && this.disconnected) device.removeEventListener('gattserverdisconnected', this.disconnected);
+      this.ready = false;
+      this.characteristic = null;
+      device?.gatt?.disconnect();
     }
 
     descriptor() {

@@ -13,6 +13,7 @@ const { normalizeCodexQuota } = require('../shared/codex-usage');
 const { normalizeCodexBarProviderSnapshot, normalizeClaudePlanUsageHistory, normalizeClaudeUsageResponse } = require('../shared/provider-usage');
 const { PROVIDERS, providerById, normalizeProviderId } = require('../shared/providers');
 const { normalizeSettings, normalizeDevice, devicesForSource, effectiveDurationSeconds } = require('../shared/settings');
+const { normalizeBluetoothCandidates } = require('../shared/bluetooth');
 
 const PORT = 48733;
 const LABEL = 'com.local.agent-status-light';
@@ -45,6 +46,48 @@ let connectionWasReady = false;
 let lastConnectionAlertAt = 0;
 const windowsBleStatuses = new Map();
 const deviceConnectionStates = new Map();
+let pendingBluetoothSelection = null;
+
+function publishBluetoothCandidates() {
+  if (!pendingBluetoothSelection || !mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send('bluetooth:candidates', {
+    devices: [...pendingBluetoothSelection.devices.values()],
+    expiresAt: pendingBluetoothSelection.expiresAt,
+  });
+}
+
+function finishBluetoothSelection(deviceId = '', reason = 'selected') {
+  const pending = pendingBluetoothSelection;
+  if (!pending) return false;
+  pendingBluetoothSelection = null;
+  clearTimeout(pending.timer);
+  try { pending.callback(String(deviceId || '')); } catch (_) {}
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('bluetooth:selection-finished', { reason, deviceId: String(deviceId || '') });
+  }
+  return true;
+}
+
+function handleBluetoothDeviceSelection(event, devices, callback) {
+  event.preventDefault();
+  const now = Date.now();
+  if (!pendingBluetoothSelection) {
+    const expiresAt = now + 30_000;
+    pendingBluetoothSelection = {
+      callback,
+      devices: new Map(),
+      expiresAt,
+      timer: setTimeout(() => finishBluetoothSelection('', 'timeout'), expiresAt - now),
+    };
+  } else {
+    // Electron can emit this event repeatedly while Chromium continues scanning.
+    pendingBluetoothSelection.callback = callback;
+  }
+  for (const device of normalizeBluetoothCandidates(devices)) {
+    pendingBluetoothSelection.devices.set(device.id, device);
+  }
+  publishBluetoothCandidates();
+}
 
 function readClaudeUsageSnapshot() {
   const claudeHistoryCandidates = [
@@ -433,12 +476,8 @@ function createWindow() {
   });
 
   if (isWindows) {
-    mainWindow.webContents.on('select-bluetooth-device', (event, devices, callback) => {
-      event.preventDefault();
-      const preferred = devices.find((device) => device.deviceName?.toUpperCase().includes('JTX-RGB'));
-      if (preferred) callback(preferred.deviceId);
-      else if (devices[0]) callback(devices[0].deviceId);
-    });
+    mainWindow.webContents.on('select-bluetooth-device', handleBluetoothDeviceSelection);
+    mainWindow.webContents.once('destroyed', () => finishBluetoothSelection('', 'window-closed'));
   }
 }
 
@@ -599,6 +638,7 @@ async function currentSnapshot() {
   let devices = [];
   if (isMac) {
     devices = await Promise.all(settings.devices.map(async (device) => {
+      if (!device.enabled) return { ...device, status: 'released', displayed: 'off', active: [], detail: '蓝牙已释放' };
       try {
         const status = parseDaemonStatus(await daemonCommand('status', 700, device.port));
         return { ...device, status: status.ble, displayed: status.displayed, active: status.active };
@@ -607,32 +647,41 @@ async function currentSnapshot() {
       }
     }));
     try {
-      const primary = devices[0];
-      if (!primary) throw new Error('尚未添加跑马灯');
-      backend = { ok: primary.status !== 'unavailable', displayed: primary.displayed, ble: primary.status, chargerSilence, active: primary.active || [] };
-      bleStatus = {
-        state: devices.some((device) => device.status === 'ready') ? 'ready' : primary.status,
-        name: devices.length > 1 ? `${devices.filter((device) => device.status === 'ready').length}/${devices.length} 盏灯` : primary.name,
-        detail: devices.some((device) => device.status === 'ready') ? 'CoreBluetooth 已连接' : '正在连接灯具',
-      };
-      chargerSilence = backend.chargerSilence;
+      const primary = devices.find((device) => device.enabled);
+      if (!primary) {
+        backend = { ok: true, displayed: 'off', ble: 'released', chargerSilence, active: [] };
+        bleStatus = { state: 'released', name: '蓝牙已释放', detail: '设备记录已保留，可随时重新连接' };
+      } else {
+        backend = { ok: primary.status !== 'unavailable', displayed: primary.displayed, ble: primary.status, chargerSilence, active: primary.active || [] };
+        const enabledDevices = devices.filter((device) => device.enabled);
+        const readyCount = enabledDevices.filter((device) => device.status === 'ready').length;
+        bleStatus = {
+          state: readyCount > 0 ? 'ready' : primary.status,
+          name: enabledDevices.length > 1 ? `${readyCount}/${enabledDevices.length} 盏灯` : primary.name,
+          detail: readyCount > 0 ? 'CoreBluetooth 已连接' : '正在连接灯具',
+        };
+        chargerSilence = backend.chargerSilence;
+      }
     } catch (error) {
       backend = { ok: false, displayed: 'off', ble: 'unavailable', chargerSilence: true, active: [], raw: error.message };
       bleStatus = { state: 'unavailable', name: 'JTX-RGB', detail: error.message };
     }
   } else {
     devices = settings.devices.map((device) => {
+      if (!device.enabled) return { ...device, status: 'released', detail: '蓝牙已释放', displayed: 'off', active: [] };
       const runtime = windowsRuntimes.get(device.id);
       const live = windowsBleStatuses.get(device.id);
       return { ...device, status: live?.state || 'disconnected', detail: live?.detail || '', ...(runtime?.snapshot() || { displayed: 'off', active: [] }) };
     });
-    const readyCount = devices.filter((device) => device.status === 'ready').length;
+    const enabledDevices = devices.filter((device) => device.enabled);
+    const readyCount = enabledDevices.filter((device) => device.status === 'ready').length;
     bleStatus = {
-      state: devices.length > 0 && readyCount === devices.length ? 'ready' : readyCount > 0 ? 'partial' : 'disconnected',
-      name: devices.length > 1 ? `${readyCount}/${devices.length} 盏灯` : devices[0]?.name || 'JTX-RGB',
-      detail: readyCount === devices.length && devices.length ? '全部设备已连接' : '存在未连接设备',
+      state: !enabledDevices.length ? 'released' : readyCount === enabledDevices.length ? 'ready' : readyCount > 0 ? 'partial' : 'disconnected',
+      name: !enabledDevices.length ? '蓝牙已释放' : enabledDevices.length > 1 ? `${readyCount}/${enabledDevices.length} 盏灯` : enabledDevices[0]?.name || 'JTX-RGB',
+      detail: !enabledDevices.length ? '设备记录已保留，可随时重新连接' : readyCount === enabledDevices.length ? '全部设备已连接' : '存在未连接设备',
     };
-    backend = { ok: true, ...(windowsRuntimes.get(settings.devices[0]?.id)?.snapshot() || { displayed: 'off', active: [] }), ble: bleStatus.state, chargerSilence };
+    const primaryEnabled = enabledDevices[0];
+    backend = { ok: true, ...(windowsRuntimes.get(primaryEnabled?.id)?.snapshot() || { displayed: 'off', active: [] }), ble: bleStatus.state, chargerSilence };
   }
   return {
     platform: process.platform,
@@ -673,6 +722,11 @@ function updateConnectionGuard(next) {
   const ready = snapshotHasConnection(next);
   const firstCheck = !connectionGuardInitialized;
   const enabled = (next.devices || []).filter((device) => device.enabled !== false);
+  if (!enabled.length) {
+    connectionWasReady = false;
+    connectionGuardInitialized = true;
+    return;
+  }
   const unready = enabled.filter((device) => device.status !== 'ready');
   const droppedDevices = unready.filter((device) => deviceConnectionStates.get(device.id) === 'ready');
   const newlyUnreadyDevices = unready.filter((device) => !deviceConnectionStates.has(device.id));
@@ -1150,8 +1204,8 @@ function inspectAdapters() {
 
 async function scanMacDevices() {
   if (!isMac) return [];
-  const primary = settings.devices[0];
-  if (!primary) throw new Error('请先保留一盏已绑定设备用于扫描');
+  const primary = settings.devices.find((device) => device.enabled);
+  if (!primary) throw new Error('所有设备均已释放；请先对已知设备点击“重新连接”');
   await daemonCommand('scan 5', 900, primary.port);
   await new Promise((resolve) => setTimeout(resolve, 5200));
   const response = await daemonCommand('devices', 900, primary.port);
@@ -1196,6 +1250,28 @@ function removeDevice(id) {
   return settings;
 }
 
+async function releaseDevice(id) {
+  const existing = settings.devices.find((device) => device.id === id);
+  if (!existing) throw new Error('设备不存在');
+  if (isMac && existing.enabled) {
+    try { await daemonCommand('release', 1200, existing.port); }
+    catch (_) { macDaemonProcesses.get(existing.id)?.kill('SIGTERM'); }
+  }
+  const devices = settings.devices.map((device) => device.id === id ? { ...device, enabled: false } : device);
+  saveSettings({ ...settings, devices });
+  windowsBleStatuses.delete(id);
+  if (isMac) installMacBackend();
+  logEvent('system', `${existing.name} 蓝牙已释放`, '跨电脑接管前请长按 POWER 约 2 秒关机，再长按约 2 秒开机');
+  dialog.showMessageBox(mainWindow, {
+    type: 'info',
+    title: '跑马灯蓝牙已释放',
+    message: `${existing.name} 已与 CodeLight 断开`,
+    detail: '这款 JTX-RGB 固件断开后不会立刻重新广播。在另一台电脑搜索前，请长按灯背面的 POWER 约 2 秒关机，再长按约 2 秒开机。不要短按：短按只会显示四格电量。名称、编号和 Provider 绑定已保留。',
+    buttons: ['知道了'],
+  }).catch(() => {});
+  return settings;
+}
+
 function registerIPC() {
   ipcMain.handle('state:get', () => currentSnapshot());
   ipcMain.handle('light:command', (_event, command) => executeCommand(command));
@@ -1206,8 +1282,16 @@ function registerIPC() {
   });
   ipcMain.handle('external:open', (_event, url) => shell.openExternal(url));
   ipcMain.handle('devices:scan', () => scanMacDevices());
+  ipcMain.handle('bluetooth:select', (_event, id) => {
+    const deviceId = String(id || '').trim();
+    if (!pendingBluetoothSelection?.devices.has(deviceId)) throw new Error('该蓝牙设备已离开扫描范围，请重新搜索');
+    finishBluetoothSelection(deviceId, 'selected');
+    return true;
+  });
+  ipcMain.handle('bluetooth:cancel', () => finishBluetoothSelection('', 'cancelled'));
   ipcMain.handle('devices:save', (_event, device) => upsertDevice(device));
   ipcMain.handle('devices:remove', (_event, id) => removeDevice(String(id || '')));
+  ipcMain.handle('devices:release', (_event, id) => releaseDevice(String(id || '')));
   ipcMain.handle('devices:test', async (_event, { id, color }) => {
     if (!['green', 'yellow', 'blue', 'red'].includes(color)) throw new Error('无效颜色');
     const device = settings.devices.find((item) => item.id === id);

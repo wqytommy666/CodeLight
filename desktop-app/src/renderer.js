@@ -48,6 +48,8 @@
   let selectedProviderId = '';
   let selectedDashboardProvider = query.get('dashboard') || localStorage.getItem('codelight.dashboard-provider') || 'claude';
   let providerIsNew = false;
+  let windowsBluetoothTarget = 'modal';
+  let windowsBluetoothSelecting = false;
   const screenshotMode = query.get('screenshot') === '1';
   const screenshotFleetCount = Math.max(0, Math.min(24, Number(query.get('fleet') || 0)));
 
@@ -61,10 +63,11 @@
 
   function setConnection(status) {
     const ready = status?.state === 'ready';
+    const released = status?.state === 'released';
     const failed = ['unavailable', 'error'].includes(status?.state);
     elements.connectionBadge.className = `connection-badge ${ready ? 'ready' : failed ? 'error' : 'pending'}`;
-    elements.connectionBadge.querySelector('span').textContent = ready ? `${status?.name || 'JTX-RGB'} 已连接` : failed ? '后台不可用' : '等待连接';
-    elements.connectButton.textContent = ready ? '管理蓝牙设备' : '连接蓝牙设备';
+    elements.connectionBadge.querySelector('span').textContent = ready ? `${status?.name || 'JTX-RGB'} 已连接` : released ? '蓝牙已释放' : failed ? '后台不可用' : '等待连接';
+    elements.connectButton.textContent = ready || released ? '管理蓝牙设备' : '连接蓝牙设备';
   }
 
   function snapshotConnected(value = snapshot) {
@@ -79,7 +82,7 @@
       ? '请确认跑马灯已开机并在电脑附近，然后重新搜索并连接。连接恢复前不会漏记软件状态。'
       : '打开跑马灯并保持在电脑附近，然后搜索蓝牙设备并点击连接。';
     elements.connectionDeviceList.replaceChildren();
-    elements.connectionNow.textContent = snapshot?.platform === 'win32' ? '打开蓝牙选择器' : '搜索蓝牙设备';
+    elements.connectionNow.textContent = '搜索蓝牙设备';
     elements.connectionNow.disabled = false;
     elements.connectionModal.hidden = false;
     elements.connectionNow.focus();
@@ -92,6 +95,13 @@
 
   function updateConnectionGuard(next) {
     if (screenshotMode) return;
+    const enabled = (next?.devices || []).filter((device) => device.enabled !== false);
+    if (!enabled.length) {
+      connectionInitialized = true;
+      connectionWasReady = false;
+      hideConnectionModal(false);
+      return;
+    }
     const ready = snapshotConnected(next);
     if (ready) {
       connectionWasReady = true;
@@ -449,9 +459,11 @@
       const dot = document.createElement('i');
       const copy = document.createElement('span');
       const name = document.createElement('strong');
-      name.textContent = `${device.name} · ${device.status === 'ready' ? '已连接' : '未连接'}`;
+      name.textContent = `${device.name} · ${device.status === 'ready' ? '已连接' : device.enabled === false ? '已释放' : '未连接'}`;
       const id = document.createElement('small');
-      id.textContent = device.id;
+      id.textContent = device.enabled === false
+        ? '跨电脑接管：长按 POWER 2 秒关机，再长按 2 秒开机'
+        : device.id;
       copy.append(name, id);
       identity.append(dot, copy);
       const route = document.createElement('div');
@@ -475,17 +487,36 @@
       test.type = 'button';
       test.className = 'secondary-button compact';
       test.textContent = '测试';
+      test.disabled = device.enabled === false;
       test.addEventListener('click', () => window.agentLight.testDevice(device.id, 'green').then(() => toast(`${device.name} 测试已发送`)).catch((error) => toast(error.message, true)));
+      const release = document.createElement('button');
+      release.type = 'button';
+      release.className = device.enabled === false ? 'primary-button compact' : 'secondary-button compact';
+      release.textContent = device.enabled === false ? '重新连接' : '释放蓝牙';
+      release.addEventListener('click', async () => {
+        try {
+          if (device.enabled === false) {
+            await window.agentLight.saveDevice({ ...device, enabled: true });
+            toast(`${device.name} 正在重新连接 Mac`);
+          } else {
+            await window.agentLight.releaseDevice(device.id);
+            bleControllers.get(device.id)?.close();
+            bleControllers.delete(device.id);
+            toast(`${device.name} 已释放；重启灯后可由另一台电脑搜索`);
+          }
+          await refresh();
+        } catch (error) { toast(error.message, true); }
+      });
       const remove = document.createElement('button');
       remove.type = 'button';
       remove.className = 'danger-button';
-      remove.textContent = '移除';
+      remove.textContent = '删除记录';
       remove.disabled = devices.length <= 1;
       remove.addEventListener('click', async () => {
         try { await window.agentLight.removeDevice(device.id); await refresh(); }
         catch (error) { toast(error.message, true); }
       });
-      actions.append(test, remove);
+      actions.append(test, release, remove);
       row.append(identity, route, actions);
       return row;
     }));
@@ -803,6 +834,66 @@
     target.replaceChildren(state);
   }
 
+  function windowsBluetoothError(error) {
+    const name = String(error?.name || '');
+    const message = String(error?.message || error || '').trim();
+    if (name === 'NotFoundError' || /cancel|cancelled|canceled/i.test(message)) {
+      return '没有选择设备。请确认 Windows 蓝牙已打开，然后重新搜索并点击 JTX-RGB。';
+    }
+    if (name === 'SecurityError' || /permission|denied|not allowed/i.test(message)) {
+      return '蓝牙权限被拒绝。请在 Windows 隐私设置中允许 CodeLight 使用蓝牙。';
+    }
+    if (name === 'NetworkError' || /gatt|connect|disconnected/i.test(message)) {
+      return '控制通道连接失败。请关闭手机 Colorful Lights、让灯靠近电脑后重试。';
+    }
+    return message || '蓝牙连接失败';
+  }
+
+  function renderWindowsBluetoothCandidates({ devices = [] } = {}) {
+    if (snapshot?.platform !== 'win32' || !windowsBluetoothSelecting) return;
+    const target = windowsBluetoothTarget === 'settings' ? elements.deviceScanResults : elements.connectionDeviceList;
+    if (!devices.length) {
+      renderScanProgress(target, '正在搜索 JTX-RGB（兼容大小写名称）…');
+      return;
+    }
+    const rows = devices.map((device) => {
+      const configured = snapshot?.devices?.find((item) => item.id === device.id);
+      const row = document.createElement('div');
+      row.className = windowsBluetoothTarget === 'settings' ? 'scan-result' : 'connection-device-item';
+      const copy = document.createElement('span');
+      const name = document.createElement('strong');
+      name.textContent = device.name || 'JTX-RGB';
+      const id = document.createElement('small');
+      id.textContent = `蓝牙 ID · ${String(device.id).slice(-8)}${configured ? ` · ${configured.name}` : ''}`;
+      copy.append(name, id);
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'primary-button compact';
+      const alreadyConnected = configured?.status === 'ready';
+      button.textContent = alreadyConnected ? '已连接' : configured ? '重新连接' : '连接';
+      button.disabled = alreadyConnected;
+      button.addEventListener('click', async () => {
+        button.disabled = true;
+        button.textContent = '连接中…';
+        if (windowsBluetoothTarget === 'modal') elements.connectionModalMessage.textContent = `正在建立 ${device.name || 'JTX-RGB'} 的 FFF0/FFF3 控制通道…`;
+        try {
+          await window.agentLight.selectBluetoothDevice(device.id);
+          renderScanProgress(target, '设备已选择，正在建立蓝牙控制通道…');
+        } catch (error) {
+          button.disabled = false;
+          button.textContent = configured ? '重新连接' : '连接';
+          toast(error.message, true);
+        }
+      });
+      row.append(copy, button);
+      return row;
+    });
+    target.replaceChildren(...rows);
+    if (windowsBluetoothTarget === 'modal') {
+      elements.connectionModalMessage.textContent = `发现 ${devices.length} 个兼容跑马灯，请点击对应设备右侧的“连接”。`;
+    }
+  }
+
   function renderDiscoveredDevices(devices) {
     elements.connectionDeviceList.replaceChildren(...devices.map((device) => {
       const row = document.createElement('div');
@@ -831,9 +922,15 @@
     elements.connectionNow.disabled = true;
     if (snapshot?.platform === 'win32') {
       try {
+        windowsBluetoothTarget = 'modal';
+        windowsBluetoothSelecting = true;
+        elements.connectionModalMessage.textContent = '正在搜索附近的 JTX-RGB，请在下方列表中选择。';
+        renderScanProgress(elements.connectionDeviceList, '正在搜索 Windows 蓝牙设备…');
         await connectWindowsDevice();
       } catch (error) {
-        elements.connectionModalMessage.textContent = `蓝牙连接失败：${error.message}`;
+        elements.connectionModalMessage.textContent = `蓝牙连接失败：${windowsBluetoothError(error)}`;
+      } finally {
+        windowsBluetoothSelecting = false;
       }
     } else {
       try {
@@ -853,7 +950,7 @@
     }
     connectionBusy = false;
     elements.connectionNow.disabled = false;
-    elements.connectionNow.textContent = snapshot?.platform === 'win32' ? '打开蓝牙选择器' : '重新搜索';
+    elements.connectionNow.textContent = '重新搜索';
   }
 
   function createWindowsController(deviceId = '') {
@@ -874,7 +971,7 @@
     const unready = (snapshot?.devices || []).find((device) => device.status !== 'ready');
     let controller = unready ? bleControllers.get(unready.id) : null;
     if (!controller) controller = createWindowsController(unready?.id || '');
-    await controller.connect(true);
+    await controller.connect(true, true);
     const descriptor = controller.descriptor();
     if (!descriptor?.id) throw new Error('系统未返回蓝牙设备 ID');
     const previous = snapshot?.devices?.find((device) => device.id === descriptor.id);
@@ -892,11 +989,11 @@
 
   function syncWindowsBleControllers(next = snapshot) {
     if (next?.platform !== 'win32') return;
-    const wanted = new Set((next.devices || []).map((device) => device.id));
+    const wanted = new Set((next.devices || []).filter((device) => device.enabled !== false).map((device) => device.id));
     for (const [id, controller] of bleControllers) {
       if (!wanted.has(id)) { controller.close(); bleControllers.delete(id); }
     }
-    for (const device of next.devices || []) {
+    for (const device of (next.devices || []).filter((item) => item.enabled !== false)) {
       if (bleControllers.has(device.id)) continue;
       const controller = createWindowsController(device.id);
       bleControllers.set(device.id, controller);
@@ -907,6 +1004,13 @@
   function setupWindowsBle() {
     if (snapshot?.platform !== 'win32') return;
     syncWindowsBleControllers();
+    window.agentLight.onBluetoothCandidates(renderWindowsBluetoothCandidates);
+    window.agentLight.onBluetoothSelectionFinished(({ reason }) => {
+      if (reason === 'timeout' && windowsBluetoothSelecting) {
+        const target = windowsBluetoothTarget === 'settings' ? elements.deviceScanResults : elements.connectionDeviceList;
+        target.textContent = '30 秒内没有发现或选择 JTX-RGB，请确认 Windows 蓝牙已打开后重试。';
+      }
+    });
     window.agentLight.onDeviceDisplay((event) => {
       const device = snapshot?.devices?.find((item) => item.id === event.deviceId);
       if (device) {
@@ -1054,6 +1158,8 @@
     renderScanProgress(elements.deviceScanResults);
     try {
       if (snapshot?.platform === 'win32') {
+        windowsBluetoothTarget = 'settings';
+        windowsBluetoothSelecting = true;
         await connectWindowsDevice();
         elements.deviceScanResults.textContent = '蓝牙设备已连接。';
       } else {
@@ -1061,8 +1167,12 @@
         if (!devices.length) elements.deviceScanResults.textContent = '没有发现 JTX-RGB，请确认设备已开机且没有被手机占用。';
         else renderDeviceScanResults(devices);
       }
-    } catch (error) { toast(error.message, true); }
-    finally { elements.scanDevices.disabled = false; elements.scanDevices.textContent = '重新搜索'; }
+    } catch (error) { toast(snapshot?.platform === 'win32' ? windowsBluetoothError(error) : error.message, true); }
+    finally {
+      windowsBluetoothSelecting = false;
+      elements.scanDevices.disabled = false;
+      elements.scanDevices.textContent = '重新搜索';
+    }
   });
   elements.refreshFullEvents.addEventListener('click', refresh);
 
@@ -1073,7 +1183,7 @@
     });
   });
   elements.connectButton.addEventListener('click', () => {
-    if (snapshotConnected(snapshot)) {
+    if (snapshotConnected(snapshot) || snapshot?.ble?.state === 'released') {
       openSettings('devices');
       return;
     }
@@ -1082,7 +1192,10 @@
   });
   elements.autoRouteButton.addEventListener('click', autoRouteDevices);
   elements.connectionNow.addEventListener('click', connect);
-  elements.connectionLater.addEventListener('click', () => hideConnectionModal(true));
+  elements.connectionLater.addEventListener('click', () => {
+    if (snapshot?.platform === 'win32' && windowsBluetoothSelecting) window.agentLight.cancelBluetoothSelection().catch(() => {});
+    hideConnectionModal(true);
+  });
   elements.offButton.addEventListener('click', () => command('clear-all', '灯光已熄灭').catch(() => {}));
   elements.hideWindow.addEventListener('click', () => window.agentLight.hideWindow());
   elements.refreshButton.addEventListener('click', refresh);

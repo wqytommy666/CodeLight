@@ -1,6 +1,7 @@
 import Foundation
 import CoreBluetooth
 import Network
+import Darwin
 
 private let defaultPort: UInt16 = 48733
 private let serviceUUID = CBUUID(string: "FFF0")
@@ -159,6 +160,8 @@ private final class AgentLightDaemon: NSObject, CBCentralManagerDelegate, CBPeri
     private var manualScanGeneration: UInt64 = 0
     private var manualScanActive = false
     private var discoveredDevices: [UUID: DiscoveredDevice] = [:]
+    private var shuttingDown = false
+    private var terminationSource: DispatchSourceSignal?
 
     init(identifier: UUID, port: UInt16) {
         self.identifier = identifier
@@ -177,6 +180,17 @@ private final class AgentLightDaemon: NSObject, CBCentralManagerDelegate, CBPeri
             queue: .main,
             options: [CBCentralManagerOptionShowPowerAlertKey: false]
         )
+
+        // A light can only maintain one central connection. This firmware does
+        // not resume advertising after a normal CoreBluetooth cancellation, but
+        // it does when the owning central process exits and macOS releases the
+        // link. Handle SIGTERM so we can blank the LEDs and then exit cleanly
+        // without issuing cancelPeripheralConnection.
+        signal(SIGTERM, SIG_IGN)
+        let source = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+        source.setEventHandler { [weak self] in self?.releaseBluetoothAndExit(after: 0.12) }
+        source.resume()
+        terminationSource = source
 
         Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             self?.pruneExpiredEntries()
@@ -231,6 +245,9 @@ private final class AgentLightDaemon: NSObject, CBCentralManagerDelegate, CBPeri
             let values = discoveredDevices.values.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
             guard let data = try? JSONEncoder().encode(values) else { return "ERR unable to encode devices" }
             return "OK devices=\(data.base64EncodedString())"
+        case "release":
+            releaseBluetoothAndExit(after: 0.30)
+            return "OK bluetooth released"
         case "charger-silence":
             guard parts.count >= 2, parts[1] == "on" || parts[1] == "off" else {
                 return "ERR usage: charger-silence <on|off>"
@@ -415,6 +432,18 @@ private final class AgentLightDaemon: NSObject, CBCentralManagerDelegate, CBPeri
         send(zeroBrightnessFrame, quiet: quiet)
     }
 
+    private func releaseBluetoothAndExit(after delay: TimeInterval) {
+        guard !shuttingDown else { return }
+        shuttingDown = true
+        reconnectPending = true
+        entries.removeAll()
+        animationGeneration &+= 1
+        if ready { suppressChargingIndicator(quiet: true) }
+        central.stopScan()
+        log("BLE_RELEASE requested")
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { exit(0) }
+    }
+
     private func send(_ bytes: [UInt8], quiet: Bool = false) {
         guard ready, let peripheral, let characteristic = writeCharacteristic else { return }
         // The official Colorful Lights client uses acknowledged GATT writes.
@@ -434,7 +463,7 @@ private final class AgentLightDaemon: NSObject, CBCentralManagerDelegate, CBPeri
     }
 
     private func connectKnownPeripheral() {
-        guard central.state == .poweredOn, peripheral == nil else { return }
+        guard !shuttingDown, central.state == .poweredOn, peripheral == nil else { return }
         if let found = central.retrievePeripherals(withIdentifiers: [identifier]).first {
             connect(found)
         } else {
@@ -444,6 +473,7 @@ private final class AgentLightDaemon: NSObject, CBCentralManagerDelegate, CBPeri
     }
 
     private func connect(_ found: CBPeripheral) {
+        guard !shuttingDown else { return }
         central.stopScan()
         peripheral = found
         found.delegate = self
@@ -472,7 +502,7 @@ private final class AgentLightDaemon: NSObject, CBCentralManagerDelegate, CBPeri
     }
 
     private func scheduleReconnect() {
-        guard !reconnectPending else { return }
+        guard !shuttingDown, !reconnectPending else { return }
         reconnectPending = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
             guard let self else { return }
@@ -513,7 +543,7 @@ private final class AgentLightDaemon: NSObject, CBCentralManagerDelegate, CBPeri
         log("BLE_CONNECT_FAILED \(error?.localizedDescription ?? "unknown")")
         self.peripheral = nil
         ready = false
-        scheduleReconnect()
+        if !shuttingDown { scheduleReconnect() }
     }
 
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
@@ -522,7 +552,7 @@ private final class AgentLightDaemon: NSObject, CBCentralManagerDelegate, CBPeri
         self.peripheral = nil
         writeCharacteristic = nil
         ready = false
-        scheduleReconnect()
+        if !shuttingDown { scheduleReconnect() }
     }
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
