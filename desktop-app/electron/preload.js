@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('agentLight', {
   selectBluetoothDevice: (id) => ipcRenderer.invoke('bluetooth:select', id),
   cancelBluetoothSelection: () => ipcRenderer.invoke('bluetooth:cancel'),
   saveDevice: (device) => ipcRenderer.invoke('devices:save', device),
+  claimDevice: (device) => ipcRenderer.invoke('devices:claim', device),
   removeDevice: (id) => ipcRenderer.invoke('devices:remove', id),
   releaseDevice: (id) => ipcRenderer.invoke('devices:release', id),
   testDevice: (id, color) => ipcRenderer.invoke('devices:test', { id, color }),

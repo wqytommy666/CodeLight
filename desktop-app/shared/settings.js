@@ -89,7 +89,22 @@ function effectiveDurationSeconds(settings) {
   return value === 0 ? 315_360_000 : value;
 }
 
+function nextAvailableProviderId(input, preferredIds = []) {
+  const settings = normalizeSettings(input);
+  const assigned = new Set(settings.devices
+    .filter((device) => device.enabled)
+    .flatMap((device) => device.sources)
+    .filter((source) => source !== '*'));
+  const preferred = [...new Set(preferredIds.map((id) => String(id || '').trim()).filter(Boolean))];
+  const order = [
+    ...preferred.flatMap((id) => settings.providers.filter((provider) => provider.id === id)),
+    ...settings.providers.filter((provider) => provider.pinned),
+    ...settings.providers.filter((provider) => !provider.pinned),
+  ].filter((provider, index, items) => provider.enabled && items.findIndex((item) => item.id === provider.id) === index);
+  return order.find((provider) => !assigned.has(provider.id))?.id || order[0]?.id || '*';
+}
+
 module.exports = {
   DEFAULT_NOTIFICATIONS, DEFAULT_DURATION_SECONDS, ALLOWED_DURATIONS,
-  normalizeProvider, normalizeDevice, normalizeSettings, devicesForSource, effectiveDurationSeconds,
+  normalizeProvider, normalizeDevice, normalizeSettings, devicesForSource, effectiveDurationSeconds, nextAvailableProviderId,
 };

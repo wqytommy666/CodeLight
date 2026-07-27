@@ -50,6 +50,7 @@
   let providerIsNew = false;
   let windowsBluetoothTarget = 'modal';
   let windowsBluetoothSelecting = false;
+  let windowsAdaptersInstalled = false;
   const screenshotMode = query.get('screenshot') === '1';
   const screenshotFleetCount = Math.max(0, Math.min(24, Number(query.get('fleet') || 0)));
 
@@ -793,14 +794,15 @@
       button.textContent = '连接中…';
     }
     try {
-      await window.agentLight.saveDevice({
+      const claimed = await window.agentLight.claimDevice({
         id: device.id,
         name: device.name || 'JTX-RGB',
         enabled: true,
-        sources: previous?.sources || ['*'],
+        ...(previous?.sources ? { sources: previous.sources } : {}),
       });
       if (await waitForConnection(device.id)) {
-        toast(`${device.name || 'JTX-RGB'} 蓝牙已连接`);
+        const provider = providerFor(claimed.source);
+        toast(`${device.name || 'JTX-RGB'} 已连接${provider ? `并绑定 ${provider.name}` : ''}`);
         if (closeOnSuccess) hideConnectionModal(false);
         return true;
       }
@@ -975,15 +977,25 @@
     const descriptor = controller.descriptor();
     if (!descriptor?.id) throw new Error('系统未返回蓝牙设备 ID');
     const previous = snapshot?.devices?.find((device) => device.id === descriptor.id);
-    await window.agentLight.saveDevice({
+    const claimed = await window.agentLight.claimDevice({
       id: descriptor.id,
       name: descriptor.name,
       enabled: true,
-      sources: previous?.sources || unready?.sources || ['*'],
+      ...((previous?.sources || unready?.sources) ? { sources: previous?.sources || unready?.sources } : {}),
     });
     if (unready?.id && unready.id !== descriptor.id) bleControllers.delete(unready.id);
     bleControllers.set(descriptor.id, controller);
+    if (!windowsAdaptersInstalled) {
+      const result = await window.agentLight.installHooks();
+      windowsAdaptersInstalled = result?.ok !== false;
+      if (result?.ok === false) toast(result.message, true);
+    }
     await refresh();
+    const provider = providerFor(claimed.source);
+    if (claimed.created) {
+      const reason = claimed.matchedBy === 'installed-tool' ? '检测到本机软件' : '按灯具连接顺序';
+      toast(`${descriptor.name} 已自动绑定 ${provider?.name || claimed.source} · ${reason}`);
+    }
     if (snapshotConnected()) hideConnectionModal(false);
   }
 

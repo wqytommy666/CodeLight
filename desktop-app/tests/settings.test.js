@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { normalizeSettings, devicesForSource, effectiveDurationSeconds } = require('../shared/settings');
+const { normalizeSettings, devicesForSource, effectiveDurationSeconds, nextAvailableProviderId } = require('../shared/settings');
 
 test('default settings expose an extensible provider registry and 60 second duration', () => {
   const settings = normalizeSettings({});
@@ -70,4 +70,17 @@ test('a released lamp keeps its provider binding but no longer receives events',
   assert.equal(settings.devices[0].enabled, false);
   assert.deepEqual(settings.devices[0].sources, ['claude']);
   assert.deepEqual(devicesForSource(settings, 'claude'), []);
+});
+
+test('new lamps automatically claim Claude then Codex without sharing one provider', () => {
+  const base = normalizeSettings({ devices: [] });
+  assert.equal(nextAvailableProviderId(base), 'claude');
+  const oneLamp = normalizeSettings({ devices: [{ id: 'lamp-a', sources: ['claude'] }] });
+  assert.equal(nextAvailableProviderId(oneLamp), 'codex');
+});
+
+test('a provider detected on the new computer takes precedence for the first lamp', () => {
+  const settings = normalizeSettings({ devices: [] });
+  assert.equal(nextAvailableProviderId(settings, ['codex']), 'codex');
+  assert.equal(nextAvailableProviderId(settings, ['claude']), 'claude');
 });

@@ -12,7 +12,7 @@ const { mergeHookGroups } = require('../shared/hook-config');
 const { normalizeCodexQuota } = require('../shared/codex-usage');
 const { normalizeCodexBarProviderSnapshot, normalizeClaudePlanUsageHistory, normalizeClaudeUsageResponse } = require('../shared/provider-usage');
 const { PROVIDERS, providerById, normalizeProviderId } = require('../shared/providers');
-const { normalizeSettings, normalizeDevice, devicesForSource, effectiveDurationSeconds } = require('../shared/settings');
+const { normalizeSettings, normalizeDevice, devicesForSource, effectiveDurationSeconds, nextAvailableProviderId } = require('../shared/settings');
 const { normalizeBluetoothCandidates } = require('../shared/bluetooth');
 
 const PORT = 48733;
@@ -1241,6 +1241,38 @@ function upsertDevice(input) {
   return settings;
 }
 
+function detectedPreferredProviders() {
+  const home = os.homedir();
+  const appData = process.env.APPDATA || '';
+  const localAppData = process.env.LOCALAPPDATA || '';
+  const evidence = {
+    claude: [path.join(home, '.claude'), appData && path.join(appData, 'Claude')],
+    codex: [path.join(home, '.codex'), appData && path.join(appData, 'Codex'), localAppData && path.join(localAppData, 'Programs', 'Codex')],
+  };
+  return ['claude', 'codex'].filter((id) => evidence[id].filter(Boolean).some((candidate) => fs.existsSync(candidate)));
+}
+
+function claimConnectedDevice(input) {
+  const id = String(input?.id || '').trim();
+  if (!id) throw new Error('缺少设备 ID');
+  const previous = settings.devices.find((device) => device.id === id);
+  const detected = detectedPreferredProviders();
+  const source = previous?.sources?.[0] || nextAvailableProviderId(settings, detected);
+  upsertDevice({
+    ...input,
+    enabled: true,
+    sources: previous?.sources?.length ? previous.sources : [source],
+  });
+  const device = settings.devices.find((item) => item.id === id);
+  return {
+    settings,
+    device,
+    source: device?.sources?.[0] || source,
+    created: !previous,
+    matchedBy: detected.includes(source) ? 'installed-tool' : 'provider-order',
+  };
+}
+
 function removeDevice(id) {
   if (settings.devices.length <= 1) throw new Error('至少保留一盏设备');
   const devices = settings.devices.filter((device) => device.id !== id);
@@ -1290,6 +1322,7 @@ function registerIPC() {
   });
   ipcMain.handle('bluetooth:cancel', () => finishBluetoothSelection('', 'cancelled'));
   ipcMain.handle('devices:save', (_event, device) => upsertDevice(device));
+  ipcMain.handle('devices:claim', (_event, device) => claimConnectedDevice(device));
   ipcMain.handle('devices:remove', (_event, id) => removeDevice(String(id || '')));
   ipcMain.handle('devices:release', (_event, id) => releaseDevice(String(id || '')));
   ipcMain.handle('devices:test', async (_event, { id, color }) => {
