@@ -40,5 +40,8 @@ test('multi-lamp demos support a shared wall-clock start for synchronized flashi
   assert.match(source, /startMilliseconds \/ 1000/);
   const main = fs.readFileSync(path.join(__dirname, '..', 'electron', 'main.js'), 'utf8');
   assert.match(main, /demo-at \$\{demo\[1\]/);
-  assert.match(main, /Date\.now\(\) \+ 600/);
+  assert.match(main, /Date\.now\(\) \+ 1000/);
+  assert.match(source, /prepareSynchronizedDemo/);
+  assert.match(source, /animatePrepared/);
+  assert.match(source, /prepared=1/);
 });

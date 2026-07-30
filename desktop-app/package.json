@@ -1,6 +1,6 @@
 {
   "name": "codelight",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "description": "CodeLight — physical BLE status lights and desktop notifications for coding agents",
   "main": "electron/main.js",
   "type": "commonjs",

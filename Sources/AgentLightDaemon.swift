@@ -159,6 +159,7 @@ private final class AgentLightDaemon: NSObject, CBCentralManagerDelegate, CBPeri
     private var chargingSilenceEnabled = true
     private var chargingPreviewGeneration: UInt64 = 0
     private var scheduledDemoGeneration: UInt64 = 0
+    private var preparedDemoState: LightState?
     private var manualScanGeneration: UInt64 = 0
     private var manualScanActive = false
     private var discoveredDevices: [UUID: DiscoveredDevice] = [:]
@@ -203,7 +204,9 @@ private final class AgentLightDaemon: NSObject, CBCentralManagerDelegate, CBPeri
         // cannot leak its white/charging frame between our flashes.
         Timer.scheduledTimer(withTimeInterval: 0.6, repeats: true) { [weak self] _ in
             guard let self else { return }
-            if self.displayedState == .off {
+            if let prepared = self.preparedDemoState {
+                self.send(colorFrame(prepared), quiet: true)
+            } else if self.displayedState == .off {
                 if self.chargingSilenceEnabled { self.send(zeroBrightnessFrame, quiet: true) }
             } else {
                 self.send(colorFrame(self.displayedState), quiet: true)
@@ -215,6 +218,10 @@ private final class AgentLightDaemon: NSObject, CBCentralManagerDelegate, CBPeri
     private func handleCommand(_ rawLine: String) -> String {
         let parts = rawLine.split(whereSeparator: { $0.isWhitespace }).map(String.init)
         guard let verb = parts.first?.lowercased() else { return "ERR empty command" }
+        if preparedDemoState != nil && !["ping", "status", "scan", "devices", "demo-at"].contains(verb) {
+            scheduledDemoGeneration &+= 1
+            preparedDemoState = nil
+        }
 
         switch verb {
         case "ping":
@@ -340,11 +347,20 @@ private final class AgentLightDaemon: NSObject, CBCentralManagerDelegate, CBPeri
             let delay = min(2, max(0, requestedStart.timeIntervalSinceNow))
             scheduledDemoGeneration &+= 1
             let generation = scheduledDemoGeneration
+            preparedDemoState = state
+            prepareSynchronizedDemo(state, generation: generation)
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
                 guard let self, self.scheduledDemoGeneration == generation else { return }
                 let now = Date()
+                self.preparedDemoState = nil
                 self.entries["manual-demo"] = StatusEntry(state: state, updatedAt: now, expiresAt: now.addingTimeInterval(seconds))
-                self.refreshDisplay(force: true)
+                let next = self.effectiveState()
+                self.displayedState = next
+                if next == state {
+                    self.animatePrepared(state)
+                } else {
+                    self.animate(next)
+                }
             }
             return "OK demo-at \(state.rawValue) start_ms=\(Int(startMilliseconds))"
         case "raw":
@@ -450,6 +466,52 @@ private final class AgentLightDaemon: NSObject, CBCentralManagerDelegate, CBPeri
         }
     }
 
+    private func prepareSynchronizedDemo(_ state: LightState, generation: UInt64) {
+        animationGeneration &+= 1
+        let animation = animationGeneration
+        log("PREPARE state=\(state.rawValue) generation=\(generation)")
+        let actions: [(Double, [UInt8])] = [
+            (0.00, zeroBrightnessFrame),
+            (0.03, powerOnFrame),
+            (0.06, staticModeFrame),
+            (0.09, colorFrame(state)),
+            (0.30, colorFrame(state)),
+        ]
+        for (delay, frame) in actions {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self,
+                      self.scheduledDemoGeneration == generation,
+                      self.animationGeneration == animation,
+                      self.preparedDemoState == state else { return }
+                self.send(frame, quiet: true)
+            }
+        }
+    }
+
+    private func animatePrepared(_ state: LightState) {
+        animationGeneration &+= 1
+        let generation = animationGeneration
+        log("DISPLAY state=\(state.rawValue) active=\(entries.count) prepared=1")
+        // Color and static mode were loaded while brightness was zero. At the
+        // shared timestamp every lamp needs just one visible reveal frame;
+        // subsequent flashes also toggle only brightness.
+        let actions: [(Double, [UInt8])] = [
+            (0.00, maxBrightnessFrame),
+            (0.12, zeroBrightnessFrame), (0.24, maxBrightnessFrame),
+            (0.36, zeroBrightnessFrame), (0.48, maxBrightnessFrame),
+            (0.60, zeroBrightnessFrame), (0.72, maxBrightnessFrame),
+            (0.84, zeroBrightnessFrame), (0.96, maxBrightnessFrame),
+            (1.08, zeroBrightnessFrame), (1.20, maxBrightnessFrame),
+            (1.32, zeroBrightnessFrame), (1.44, maxBrightnessFrame),
+        ]
+        for (delay, frame) in actions {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self, self.animationGeneration == generation, self.displayedState == state else { return }
+                self.send(frame)
+            }
+        }
+    }
+
     private func suppressChargingIndicator(quiet: Bool = false) {
         send(powerOffFrame, quiet: quiet)
         send(zeroBrightnessFrame, quiet: quiet)
@@ -461,6 +523,7 @@ private final class AgentLightDaemon: NSObject, CBCentralManagerDelegate, CBPeri
         reconnectPending = true
         entries.removeAll()
         scheduledDemoGeneration &+= 1
+        preparedDemoState = nil
         animationGeneration &+= 1
         if ready { suppressChargingIndicator(quiet: true) }
         central.stopScan()

@@ -776,7 +776,7 @@ async function executeCommand(command) {
     // wall-clock start time so TCP scheduling and process wake-up differences
     // do not turn a fleet test into a visible left-to-right chase.
     const dispatchedCommand = demo && selected.length > 1
-      ? `demo-at ${demo[1].toLowerCase()} ${Math.min(300, Math.max(1, Number(demo[2] || 60)))} ${Date.now() + 600}`
+      ? `demo-at ${demo[1].toLowerCase()} ${Math.min(300, Math.max(1, Number(demo[2] || 60)))} ${Date.now() + 1000}`
       : command;
     const responses = await Promise.all(selected.map((device) => daemonCommand(dispatchedCommand, 900, device.port)));
     const failed = responses.find((response) => !response.startsWith('OK'));
