@@ -774,9 +774,15 @@
     }
   }
 
-  async function waitForConnection(deviceId = '') {
-    for (let attempt = 0; attempt < 10; attempt += 1) {
+  async function waitForConnection(deviceId = '', onProgress = null) {
+    // A first CoreBluetooth connection commonly needs 8-15 seconds: macOS has
+    // to connect, discover FFF0/FFF3 and then wait for this lamp's command
+    // parser. The old 7-second UI timeout reported failure even though the
+    // backend became ready a moment later.
+    const attempts = 40;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 700));
+      if (attempt % 5 === 4) onProgress?.(attempt + 1, attempts);
       const next = await window.agentLight.getState();
       renderSnapshot(next);
       if (deviceId) {
@@ -800,13 +806,15 @@
         enabled: true,
         ...(previous?.sources ? { sources: previous.sources } : {}),
       });
-      if (await waitForConnection(device.id)) {
+      if (await waitForConnection(device.id, (attempt, attempts) => {
+        if (button?.isConnected) button.textContent = `连接中 ${Math.ceil((attempts - attempt) * 0.7)}s`;
+      })) {
         const provider = providerFor(claimed.source);
         toast(`${device.name || 'JTX-RGB'} 已连接${provider ? `并绑定 ${provider.name}` : ''}`);
         if (closeOnSuccess) hideConnectionModal(false);
         return true;
       }
-      elements.connectionModalMessage.textContent = '设备已保存，但暂时没有连上。请确认灯已开机、未被手机 Colorful Lights 占用，然后重试。';
+      elements.connectionModalMessage.textContent = '设备已保存，但 28 秒内没有连上。请确认灯已开机、未被手机 Colorful Lights 占用，然后重试。';
       return false;
     } finally {
       if (button?.isConnected) {
@@ -904,12 +912,13 @@
       const name = document.createElement('strong');
       name.textContent = device.name || 'JTX-RGB';
       const id = document.createElement('small');
-      id.textContent = `${bluetoothSignal(device.rssi)} · ${String(device.id).slice(-8)}`;
+      id.textContent = `${bluetoothSignal(device.rssi)} · ${String(device.id).slice(-8)}${device.configuredName ? ` · ${device.configuredName}` : ''}`;
       copy.append(name, id);
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'primary-button compact';
-      button.textContent = device.configured ? '重新连接' : '连接';
+      button.textContent = device.configured && device.configuredEnabled ? '已绑定' : device.configured ? '重新连接' : '连接';
+      button.disabled = device.configured && device.configuredEnabled;
       button.addEventListener('click', () => bindMacDevice(device, { button }).catch((error) => {
         elements.connectionModalMessage.textContent = `连接失败：${error.message}`;
       }));
@@ -1050,12 +1059,13 @@
       const name = document.createElement('strong');
       name.textContent = device.name || 'JTX-RGB';
       const id = document.createElement('small');
-      id.textContent = `${bluetoothSignal(device.rssi)} · ${String(device.id).slice(-8)}`;
+      id.textContent = `${bluetoothSignal(device.rssi)} · ${String(device.id).slice(-8)}${device.configuredName ? ` · ${device.configuredName}` : ''}`;
       copy.append(name, id);
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'primary-button compact';
-      button.textContent = device.configured ? '重新连接' : '连接';
+      button.textContent = device.configured && device.configuredEnabled ? '已绑定' : device.configured ? '重新连接' : '连接';
+      button.disabled = device.configured && device.configuredEnabled;
       button.addEventListener('click', async () => {
         try {
           const connected = await bindMacDevice(device, { button, closeOnSuccess: false });

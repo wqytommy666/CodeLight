@@ -13,7 +13,7 @@ const { normalizeCodexQuota } = require('../shared/codex-usage');
 const { normalizeCodexBarProviderSnapshot, normalizeClaudePlanUsageHistory, normalizeClaudeUsageResponse } = require('../shared/provider-usage');
 const { PROVIDERS, providerById, normalizeProviderId } = require('../shared/providers');
 const { normalizeSettings, normalizeDevice, devicesForSource, effectiveDurationSeconds, nextAvailableProviderId } = require('../shared/settings');
-const { normalizeBluetoothCandidates } = require('../shared/bluetooth');
+const { normalizeBluetoothCandidates, prioritizeUnboundCandidates } = require('../shared/bluetooth');
 
 const PORT = 48733;
 const LABEL = 'com.local.agent-status-light';
@@ -1212,10 +1212,7 @@ async function scanMacDevices() {
   const encoded = response.match(/devices=([^ ]+)/)?.[1];
   if (!encoded) throw new Error(response || '没有发现设备');
   const found = JSON.parse(Buffer.from(encoded, 'base64').toString('utf8'));
-  return found.map((device) => ({
-    ...device,
-    configured: settings.devices.some((item) => item.id.toLowerCase() === String(device.id).toLowerCase()),
-  }));
+  return prioritizeUnboundCandidates(found, settings.devices);
 }
 
 function upsertDevice(input) {

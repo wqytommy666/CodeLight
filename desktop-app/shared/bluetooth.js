@@ -18,6 +18,18 @@ function normalizeBluetoothCandidates(devices = []) {
   return [...found.values()];
 }
 
+function prioritizeUnboundCandidates(devices = [], configuredDevices = []) {
+  return devices.map((device) => {
+    const configured = configuredDevices.find((item) => String(item?.id || '').toLowerCase() === String(device?.id || '').toLowerCase());
+    return {
+      ...device,
+      configured: Boolean(configured),
+      configuredName: configured?.name || '',
+      configuredEnabled: Boolean(configured && configured.enabled !== false),
+    };
+  }).sort((left, right) => Number(left.configured) - Number(right.configured) || Number(right.rssi) - Number(left.rssi));
+}
+
 function bluetoothErrorMessage(error) {
   const name = String(error?.name || '');
   const message = String(error?.message || error || '').trim();
@@ -44,5 +56,6 @@ module.exports = {
   WRITE_UUID,
   isJtxRgbName,
   normalizeBluetoothCandidates,
+  prioritizeUnboundCandidates,
   bluetoothErrorMessage,
 };
