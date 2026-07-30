@@ -771,7 +771,14 @@ async function executeCommand(command) {
     const targets = settings.devices.filter((device) => device.enabled);
     if (!targets.length) throw new Error('尚未添加跑马灯');
     const selected = command.trim() === 'status' ? targets.slice(0, 1) : targets;
-    const responses = await Promise.all(selected.map((device) => daemonCommand(command, 700, device.port)));
+    const demo = command.trim().match(/^demo\s+(green|blue|yellow|red)(?:\s+([0-9.]+))?$/i);
+    // Each lamp has its own CoreBluetooth helper. Give every helper the same
+    // wall-clock start time so TCP scheduling and process wake-up differences
+    // do not turn a fleet test into a visible left-to-right chase.
+    const dispatchedCommand = demo && selected.length > 1
+      ? `demo-at ${demo[1].toLowerCase()} ${Math.min(300, Math.max(1, Number(demo[2] || 60)))} ${Date.now() + 600}`
+      : command;
+    const responses = await Promise.all(selected.map((device) => daemonCommand(dispatchedCommand, 900, device.port)));
     const failed = responses.find((response) => !response.startsWith('OK'));
     if (failed) throw new Error(failed || '命令失败');
     const response = responses.join(' | ');

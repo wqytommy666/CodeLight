@@ -14,6 +14,7 @@ private extension Data {
 
 private func log(_ message: String) {
     let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
     let line = "\(formatter.string(from: Date())) \(message)\n"
     FileHandle.standardOutput.write(Data(line.utf8))
 }
@@ -157,6 +158,7 @@ private final class AgentLightDaemon: NSObject, CBCentralManagerDelegate, CBPeri
     private var animationGeneration: UInt64 = 0
     private var chargingSilenceEnabled = true
     private var chargingPreviewGeneration: UInt64 = 0
+    private var scheduledDemoGeneration: UInt64 = 0
     private var manualScanGeneration: UInt64 = 0
     private var manualScanActive = false
     private var discoveredDevices: [UUID: DiscoveredDevice] = [:]
@@ -312,6 +314,7 @@ private final class AgentLightDaemon: NSObject, CBCentralManagerDelegate, CBPeri
             }
             return "OK activity \(parts[1])"
         case "clear-all", "off":
+            scheduledDemoGeneration &+= 1
             entries.removeAll()
             refreshDisplay(force: true)
             return "OK off"
@@ -320,10 +323,30 @@ private final class AgentLightDaemon: NSObject, CBCentralManagerDelegate, CBPeri
                 return "ERR usage: demo <green|blue|yellow|red> [seconds]"
             }
             let seconds = min(300, max(1, Double(parts.count >= 3 ? parts[2] : "60") ?? 60))
+            scheduledDemoGeneration &+= 1
             let now = Date()
             entries["manual-demo"] = StatusEntry(state: state, updatedAt: now, expiresAt: now.addingTimeInterval(seconds))
             refreshDisplay(force: true)
             return "OK demo \(state.rawValue)"
+        case "demo-at":
+            guard parts.count >= 4,
+                  let state = LightState(rawValue: parts[1]), state != .off,
+                  let requestedSeconds = Double(parts[2]),
+                  let startMilliseconds = Double(parts[3]) else {
+                return "ERR usage: demo-at <green|blue|yellow|red> <seconds> <unix-ms>"
+            }
+            let seconds = min(300, max(1, requestedSeconds))
+            let requestedStart = Date(timeIntervalSince1970: startMilliseconds / 1000)
+            let delay = min(2, max(0, requestedStart.timeIntervalSinceNow))
+            scheduledDemoGeneration &+= 1
+            let generation = scheduledDemoGeneration
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self, self.scheduledDemoGeneration == generation else { return }
+                let now = Date()
+                self.entries["manual-demo"] = StatusEntry(state: state, updatedAt: now, expiresAt: now.addingTimeInterval(seconds))
+                self.refreshDisplay(force: true)
+            }
+            return "OK demo-at \(state.rawValue) start_ms=\(Int(startMilliseconds))"
         case "raw":
             // Local diagnostics for firmware variants. This endpoint is bound
             // to 127.0.0.1 and still validates the captured BC ... 55 frame.
@@ -437,6 +460,7 @@ private final class AgentLightDaemon: NSObject, CBCentralManagerDelegate, CBPeri
         shuttingDown = true
         reconnectPending = true
         entries.removeAll()
+        scheduledDemoGeneration &+= 1
         animationGeneration &+= 1
         if ready { suppressChargingIndicator(quiet: true) }
         central.stopScan()

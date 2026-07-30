@@ -2,7 +2,10 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const { POWER_ON, POWER_OFF, MAX_BRIGHTNESS, ZERO_BRIGHTNESS, STATIC_MODE, colorFrame, burstSequence, hex } = require('../shared/protocol');
+const source = fs.readFileSync(path.join(__dirname, '..', '..', 'Sources', 'AgentLightDaemon.swift'), 'utf8');
 
 test('power frames match the captured JTX-RGB protocol', () => {
   assert.equal(hex(POWER_ON), 'BC 01 01 01 55');
@@ -30,4 +33,12 @@ test('burst flashes six times and ends steady in the selected color', () => {
   assert.equal(hex(sequence.at(-2)[1]), hex(colorFrame('blue')));
   assert.equal(hex(sequence.at(-1)[1]), hex(MAX_BRIGHTNESS));
   assert.equal(sequence.slice(1).some(([, frame]) => hex(frame) === hex(POWER_OFF)), false);
+});
+
+test('multi-lamp demos support a shared wall-clock start for synchronized flashing', () => {
+  assert.match(source, /case "demo-at":/);
+  assert.match(source, /startMilliseconds \/ 1000/);
+  const main = fs.readFileSync(path.join(__dirname, '..', 'electron', 'main.js'), 'utf8');
+  assert.match(main, /demo-at \$\{demo\[1\]/);
+  assert.match(main, /Date\.now\(\) \+ 600/);
 });
