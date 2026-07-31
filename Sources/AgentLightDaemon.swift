@@ -54,6 +54,12 @@ private struct DiscoveredDevice: Codable {
     let rssi: Int
 }
 
+private struct PendingWriteAck {
+    let frame: String
+    let queuedAt: Date
+    let trace: Bool
+}
+
 private let powerOnFrame: [UInt8] = [0xBC, 0x01, 0x01, 0x01, 0x55]
 private let powerOffFrame: [UInt8] = [0xBC, 0x01, 0x01, 0x00, 0x55]
 private let maxBrightnessFrame: [UInt8] = [0xBC, 0x05, 0x06, 0x03, 0xE8, 0x00, 0x00, 0x00, 0x00, 0x55]
@@ -165,6 +171,8 @@ private final class AgentLightDaemon: NSObject, CBCentralManagerDelegate, CBPeri
     private var discoveredDevices: [UUID: DiscoveredDevice] = [:]
     private var shuttingDown = false
     private var terminationSource: DispatchSourceSignal?
+    private var pendingWriteAcks: [PendingWriteAck] = []
+    private var maintenanceSuspendedUntil = Date.distantPast
 
     init(identifier: UUID, port: UInt16) {
         self.identifier = identifier
@@ -204,6 +212,11 @@ private final class AgentLightDaemon: NSObject, CBCentralManagerDelegate, CBPeri
         // cannot leak its white/charging frame between our flashes.
         Timer.scheduledTimer(withTimeInterval: 0.6, repeats: true) { [weak self] _ in
             guard let self else { return }
+            // A response write takes roughly one BLE connection interval per
+            // lamp. Do not inject maintenance frames into an active burst: on
+            // two lamps those extra writes used to build a several-second GATT
+            // backlog and made otherwise synchronized flashes drift apart.
+            guard Date() >= self.maintenanceSuspendedUntil else { return }
             if let prepared = self.preparedDemoState {
                 self.send(colorFrame(prepared), quiet: true)
             } else if self.displayedState == .off {
@@ -418,6 +431,7 @@ private final class AgentLightDaemon: NSObject, CBCentralManagerDelegate, CBPeri
         log("DISPLAY state=\(state.rawValue) active=\(entries.count)")
 
         guard state != .off else {
+            maintenanceSuspendedUntil = Date().addingTimeInterval(0.4)
             if chargingSilenceEnabled {
                 suppressChargingIndicator()
             } else {
@@ -432,31 +446,23 @@ private final class AgentLightDaemon: NSObject, CBCentralManagerDelegate, CBPeri
         // Set the target color while brightness is zero, then reveal it.
         // Every scheduled operation checks a generation token, so a handled
         // event can cancel the sequence and turn the lamp off immediately.
+        // Keep acknowledged writes at least 200 ms apart. JTX-RGB responds to
+        // one GATT write in about 150-190 ms when two lamps share the adapter;
+        // the old 20/120 ms schedule overflowed CoreBluetooth's response queue.
         let actions: [(Double, [UInt8])] = [
             (0.00, zeroBrightnessFrame),
-            (0.02, powerOnFrame),
-            (0.03, staticModeFrame),
-            (0.04, colorFrame(state)),
-            (0.06, maxBrightnessFrame),
-            (0.18, zeroBrightnessFrame),
-            (0.28, colorFrame(state)),
-            (0.30, maxBrightnessFrame),
-            (0.42, zeroBrightnessFrame),
-            (0.52, colorFrame(state)),
-            (0.54, maxBrightnessFrame),
-            (0.66, zeroBrightnessFrame),
-            (0.76, colorFrame(state)),
-            (0.78, maxBrightnessFrame),
-            (0.90, zeroBrightnessFrame),
-            (1.00, colorFrame(state)),
-            (1.02, maxBrightnessFrame),
-            (1.14, zeroBrightnessFrame),
-            (1.24, colorFrame(state)),
-            (1.26, maxBrightnessFrame),
-            (1.38, zeroBrightnessFrame),
-            (1.48, colorFrame(state)),
-            (1.50, maxBrightnessFrame),
+            (0.20, powerOnFrame),
+            (0.40, staticModeFrame),
+            (0.60, colorFrame(state)),
+            (0.80, maxBrightnessFrame),
+            (1.04, zeroBrightnessFrame), (1.28, maxBrightnessFrame),
+            (1.52, zeroBrightnessFrame), (1.76, maxBrightnessFrame),
+            (2.00, zeroBrightnessFrame), (2.24, maxBrightnessFrame),
+            (2.48, zeroBrightnessFrame), (2.72, maxBrightnessFrame),
+            (2.96, zeroBrightnessFrame), (3.20, maxBrightnessFrame),
+            (3.44, zeroBrightnessFrame), (3.68, maxBrightnessFrame),
         ]
+        maintenanceSuspendedUntil = Date().addingTimeInterval(4.0)
 
         for (delay, frame) in actions {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
@@ -469,13 +475,13 @@ private final class AgentLightDaemon: NSObject, CBCentralManagerDelegate, CBPeri
     private func prepareSynchronizedDemo(_ state: LightState, generation: UInt64) {
         animationGeneration &+= 1
         let animation = animationGeneration
+        maintenanceSuspendedUntil = Date().addingTimeInterval(2.0)
         log("PREPARE state=\(state.rawValue) generation=\(generation)")
         let actions: [(Double, [UInt8])] = [
             (0.00, zeroBrightnessFrame),
-            (0.03, powerOnFrame),
-            (0.06, staticModeFrame),
-            (0.09, colorFrame(state)),
-            (0.30, colorFrame(state)),
+            (0.20, powerOnFrame),
+            (0.40, staticModeFrame),
+            (0.60, colorFrame(state)),
         ]
         for (delay, frame) in actions {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
@@ -497,13 +503,14 @@ private final class AgentLightDaemon: NSObject, CBCentralManagerDelegate, CBPeri
         // subsequent flashes also toggle only brightness.
         let actions: [(Double, [UInt8])] = [
             (0.00, maxBrightnessFrame),
-            (0.12, zeroBrightnessFrame), (0.24, maxBrightnessFrame),
-            (0.36, zeroBrightnessFrame), (0.48, maxBrightnessFrame),
-            (0.60, zeroBrightnessFrame), (0.72, maxBrightnessFrame),
-            (0.84, zeroBrightnessFrame), (0.96, maxBrightnessFrame),
-            (1.08, zeroBrightnessFrame), (1.20, maxBrightnessFrame),
-            (1.32, zeroBrightnessFrame), (1.44, maxBrightnessFrame),
+            (0.24, zeroBrightnessFrame), (0.48, maxBrightnessFrame),
+            (0.72, zeroBrightnessFrame), (0.96, maxBrightnessFrame),
+            (1.20, zeroBrightnessFrame), (1.44, maxBrightnessFrame),
+            (1.68, zeroBrightnessFrame), (1.92, maxBrightnessFrame),
+            (2.16, zeroBrightnessFrame), (2.40, maxBrightnessFrame),
+            (2.64, zeroBrightnessFrame), (2.88, maxBrightnessFrame),
         ]
+        maintenanceSuspendedUntil = Date().addingTimeInterval(3.2)
         for (delay, frame) in actions {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
                 guard let self, self.animationGeneration == generation, self.displayedState == state else { return }
@@ -541,12 +548,21 @@ private final class AgentLightDaemon: NSObject, CBCentralManagerDelegate, CBPeri
         let type: CBCharacteristicWriteType = characteristic.properties.contains(.write)
             ? .withResponse
             : .withoutResponse
+        if type == .withResponse {
+            if pendingWriteAcks.count >= 256 { pendingWriteAcks.removeFirst() }
+            pendingWriteAcks.append(PendingWriteAck(frame: Data(bytes).hexString, queuedAt: Date(), trace: !quiet))
+        }
         peripheral.writeValue(Data(bytes), for: characteristic, type: type)
         if !quiet { log("BLE_WRITE \(Data(bytes).hexString)") }
     }
 
     func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
+        let pending = pendingWriteAcks.isEmpty ? nil : pendingWriteAcks.removeFirst()
         if let error { log("BLE_WRITE_ERROR \(error.localizedDescription)") }
+        else if let pending, pending.trace {
+            let latency = Date().timeIntervalSince(pending.queuedAt) * 1000
+            log("BLE_WRITE_ACK latency_ms=\(String(format: "%.3f", latency)) frame=\(pending.frame)")
+        }
     }
 
     private func connectKnownPeripheral() {

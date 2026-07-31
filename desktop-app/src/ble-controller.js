@@ -36,8 +36,11 @@
       this.connectionGeneration = 0;
       this.desiredState = 'off';
       this.chargerSilence = true;
+      this.maintenanceSuspendedUntil = 0;
       this.silenceTimer = setInterval(() => {
-        if (this.chargerSilence && this.desiredState === 'off') this.write(ZERO_BRIGHTNESS, true).catch(() => {});
+        if (Date.now() >= this.maintenanceSuspendedUntil && this.chargerSilence && this.desiredState === 'off') {
+          this.write(ZERO_BRIGHTNESS, true).catch(() => {});
+        }
       }, 1000);
     }
 
@@ -169,20 +172,22 @@
       const generation = ++this.generation;
       if (!this.ready) return false;
       if (state === 'off') {
+        this.maintenanceSuspendedUntil = Date.now() + 400;
         await this.write(POWER_OFF);
         if (this.chargerSilence) await this.write(ZERO_BRIGHTNESS);
         return true;
       }
 
       const steps = burst ? [
-        [0, ZERO_BRIGHTNESS], [20, POWER_ON], [30, STATIC_MODE], [40, colorFrame(state)], [60, MAX_BRIGHTNESS],
-        [180, ZERO_BRIGHTNESS], [280, colorFrame(state)], [300, MAX_BRIGHTNESS],
-        [420, ZERO_BRIGHTNESS], [520, colorFrame(state)], [540, MAX_BRIGHTNESS],
-        [660, ZERO_BRIGHTNESS], [760, colorFrame(state)], [780, MAX_BRIGHTNESS],
-        [900, ZERO_BRIGHTNESS], [1000, colorFrame(state)], [1020, MAX_BRIGHTNESS],
-        [1140, ZERO_BRIGHTNESS], [1240, colorFrame(state)], [1260, MAX_BRIGHTNESS],
-        [1380, ZERO_BRIGHTNESS], [1480, colorFrame(state)], [1500, MAX_BRIGHTNESS],
-      ] : [[0, ZERO_BRIGHTNESS], [20, POWER_ON], [30, STATIC_MODE], [40, colorFrame(state)], [60, MAX_BRIGHTNESS]];
+        [0, ZERO_BRIGHTNESS], [200, POWER_ON], [400, STATIC_MODE], [600, colorFrame(state)], [800, MAX_BRIGHTNESS],
+        [1040, ZERO_BRIGHTNESS], [1280, MAX_BRIGHTNESS],
+        [1520, ZERO_BRIGHTNESS], [1760, MAX_BRIGHTNESS],
+        [2000, ZERO_BRIGHTNESS], [2240, MAX_BRIGHTNESS],
+        [2480, ZERO_BRIGHTNESS], [2720, MAX_BRIGHTNESS],
+        [2960, ZERO_BRIGHTNESS], [3200, MAX_BRIGHTNESS],
+        [3440, ZERO_BRIGHTNESS], [3680, MAX_BRIGHTNESS],
+      ] : [[0, ZERO_BRIGHTNESS], [200, POWER_ON], [400, STATIC_MODE], [600, colorFrame(state)], [800, MAX_BRIGHTNESS]];
+      this.maintenanceSuspendedUntil = Date.now() + (burst ? 4000 : 1100);
 
       for (const [delay, frame] of steps) {
         setTimeout(() => {

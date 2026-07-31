@@ -25,12 +25,12 @@ test('HSV frames encode the four semantic colors', () => {
 
 test('burst flashes six times and ends steady in the selected color', () => {
   const sequence = burstSequence('blue');
-  assert.equal(sequence.length, 23);
+  assert.equal(sequence.length, 17);
   assert.deepEqual(sequence.map(([at]) => at), [
-    0, 20, 30, 40, 60, 180, 280, 300, 420, 520, 540, 660,
-    760, 780, 900, 1000, 1020, 1140, 1240, 1260, 1380, 1480, 1500,
+    0, 200, 400, 600, 800, 1040, 1280, 1520, 1760,
+    2000, 2240, 2480, 2720, 2960, 3200, 3440, 3680,
   ]);
-  assert.equal(hex(sequence.at(-2)[1]), hex(colorFrame('blue')));
+  assert.equal(hex(sequence[3][1]), hex(colorFrame('blue')));
   assert.equal(hex(sequence.at(-1)[1]), hex(MAX_BRIGHTNESS));
   assert.equal(sequence.slice(1).some(([, frame]) => hex(frame) === hex(POWER_OFF)), false);
 });
@@ -40,8 +40,10 @@ test('multi-lamp demos support a shared wall-clock start for synchronized flashi
   assert.match(source, /startMilliseconds \/ 1000/);
   const main = fs.readFileSync(path.join(__dirname, '..', 'electron', 'main.js'), 'utf8');
   assert.match(main, /demo-at \$\{demo\[1\]/);
-  assert.match(main, /Date\.now\(\) \+ 1000/);
+  assert.match(main, /Date\.now\(\) \+ 1400/);
+  assert.match(source, /maintenanceSuspendedUntil/);
   assert.match(source, /prepareSynchronizedDemo/);
   assert.match(source, /animatePrepared/);
   assert.match(source, /prepared=1/);
+  assert.match(source, /BLE_WRITE_ACK latency_ms=/);
 });
