@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { mapHookEvent, StatusRuntime, definiteFailure, networkIssue, errorNotification } = require('../shared/state-machine');
+const { mapHookEvent, StatusRuntime, definiteFailure, networkIssue, errorNotification, delegatedParent } = require('../shared/state-machine');
 
 const base = { session_id: 'test-session' };
 
@@ -12,6 +12,13 @@ test('maps the agreed Claude/Codex lifecycle states', () => {
   assert.equal(mapHookEvent('codex', { ...base, hook_event_name: 'PreToolUse', tool_name: 'request_user_input' }).state, 'blue');
   assert.equal(mapHookEvent('claude', { ...base, hook_event_name: 'PostToolUseFailure' }).action, 'activity');
   assert.equal(mapHookEvent('claude', { ...base, hook_event_name: 'StopFailure' }).state, 'red');
+});
+
+test('a Codex worker delegated by Claude does not emit a child completion state', () => {
+  const nested = { ...base, hook_event_name: 'Stop', _codelight_parent_provider: 'claude' };
+  assert.equal(delegatedParent('codex', nested), 'claude');
+  assert.deepEqual(mapHookEvent('codex', nested).action, 'delegated');
+  assert.equal(mapHookEvent('claude', nested).action, 'set');
 });
 
 test('does not treat ordinary text containing scary words as a definite failure', () => {

@@ -18,6 +18,7 @@ HOME = Path.home()
 PORT = int(os.environ.get("AGENT_LIGHT_PORT", "48733"))
 EVENT_LOG_PATH = HOME / ".agent-status-light" / "events.jsonl"
 CONFIG_PATH = HOME / ".agent-status-light" / "config.json"
+HOOK_STATE_DIR = HOME / ".agent-status-light" / "hook-state"
 ERROR_KEY = "codex-runtime-error"
 COMPLETE_KEY = "codex-runtime-complete"
 CLAUDE_NETWORK_PREFIX = "claude-network-retry"
@@ -100,6 +101,47 @@ def log_action(
             handle.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
     except OSError:
         pass
+
+
+def codex_session_key(identity: str) -> str:
+    digest = hashlib.sha256(f"codex:{identity}".encode("utf-8", "replace")).hexdigest()[:24]
+    return f"codex-{digest}"
+
+
+def delegated_marker_path(key: str) -> Path:
+    safe = "".join(character for character in key if character.isalnum() or character in "-_")[:96]
+    return HOOK_STATE_DIR / f"{safe}.delegated"
+
+
+def rollout_metadata(path: Path) -> tuple[str, bool]:
+    """Return the hook session key and whether metadata names a parent agent."""
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            record = json.loads(handle.readline())
+        if record.get("type") != "session_meta" or not isinstance(record.get("payload"), dict):
+            return "", False
+        payload = record["payload"]
+        identity = str(payload.get("session_id") or payload.get("id") or "").strip()
+        key = codex_session_key(identity) if identity else ""
+        originator = str(payload.get("originator") or "").strip().lower()
+        parent = str(payload.get("parent_provider") or payload.get("parent_source") or "").strip().lower()
+        delegated = "claude" in originator or parent in {"claude", "claude-code"}
+        return key, delegated
+    except (OSError, json.JSONDecodeError, TypeError):
+        return "", False
+
+
+def delegated_rollout(path: Path) -> tuple[bool, str]:
+    """Recognize Codex work owned by Claude without suppressing direct Codex."""
+    key, explicit = rollout_metadata(path)
+    if explicit:
+        return True, key
+    if not key:
+        return False, ""
+    try:
+        return delegated_marker_path(key).is_file(), key
+    except OSError:
+        return False, key
 
 
 def classify_record(record: dict[str, Any]) -> tuple[str, str] | None:
@@ -377,7 +419,12 @@ class RolloutWatcher:
                             continue
                         decision = classify_record(record)
                         if decision:
-                            apply_action(*decision)
+                            delegated, session = delegated_rollout(path)
+                            if delegated:
+                                if decision[0] in {"green", "red", "yellow"}:
+                                    log_action("delegated", f"parent=claude · suppressed={decision[0]}", session=session)
+                            else:
+                                apply_action(*decision)
                     self.offsets[path] = handle.tell()
             except OSError:
                 continue

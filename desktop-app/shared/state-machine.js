@@ -100,12 +100,21 @@ function errorNotification(payload) {
   ].some((marker) => message.includes(marker));
 }
 
+function delegatedParent(source, payload) {
+  if (source !== 'codex') return '';
+  const parent = firstString(payload, '_codelight_parent_provider', 'parent_provider', 'parent_source', 'invoked_by')
+    .toLowerCase().replaceAll('_', '-');
+  return ['claude', 'claude-code'].includes(parent) ? 'claude' : '';
+}
+
 function mapHookEvent(source, payload, { durationSeconds = 60 } = {}) {
   const ttl = durationSeconds === 0 ? 315_360_000 : Math.max(10, Math.min(300, Number(durationSeconds) || 60));
   const event = firstString(payload, 'hook_event_name', 'event');
   const key = sessionKey(source, payload);
   const tool = normalizedTool(payload);
   const result = { event, key, source, tool, action: 'ignore' };
+  const parent = delegatedParent(source, payload);
+  if (parent) return { ...result, action: 'delegated', parent };
 
   if (['SessionStart', 'UserPromptSubmit'].includes(event)) return { ...result, action: 'activity' };
   if (event === 'SessionEnd') {
@@ -257,5 +266,5 @@ class StatusRuntime extends EventEmitter {
 
 module.exports = {
   PRIORITY, VALID_STATES, sessionKey, normalizedTool, isQuestionTool,
-  definiteFailure, diagnosticText, networkIssue, errorNotification, mapHookEvent, StatusRuntime,
+  definiteFailure, diagnosticText, networkIssue, errorNotification, delegatedParent, mapHookEvent, StatusRuntime,
 };

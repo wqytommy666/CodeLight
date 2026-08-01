@@ -95,6 +95,51 @@ def completion_marker_path(key: str) -> Path:
     return HOOK_STATE_DIR / f"{safe}.completed"
 
 
+def delegated_marker_path(key: str) -> Path:
+    safe = "".join(character for character in key if character.isalnum() or character in "-_")[:96]
+    return HOOK_STATE_DIR / f"{safe}.delegated"
+
+
+def delegated_parent(source: str, payload: dict[str, Any], environment: dict[str, str] | None = None) -> str:
+    """Return the top-level agent that owns this nested agent session.
+
+    Claude Desktop's Codex companion deliberately exports both generic Claude
+    child-session variables and a companion session id into the Codex process.
+    A direct Codex CLI/Desktop session has none of them. Explicit payload
+    metadata keeps the same rule usable by the Windows hook relay and future
+    provider adapters.
+    """
+    if source_id(source) != "codex":
+        return ""
+    explicit = first_string(
+        payload,
+        "_codelight_parent_provider",
+        "parent_provider",
+        "parent_source",
+        "invoked_by",
+    )
+    if source_id(explicit) == "claude":
+        return "claude"
+    env = os.environ if environment is None else environment
+    if env.get("CODEX_COMPANION_SESSION_ID") or env.get("CLAUDE_PLUGIN_DATA"):
+        return "claude"
+    child = str(env.get("CLAUDE_CODE_CHILD_SESSION", "")).strip().lower()
+    if child in {"1", "true", "yes", "on"}:
+        return "claude"
+    claude = str(env.get("CLAUDECODE", "")).strip().lower()
+    if claude in {"1", "true", "yes", "on"} and env.get("CLAUDE_CODE_ENTRYPOINT"):
+        return "claude"
+    return ""
+
+
+def mark_delegated(key: str, parent: str) -> None:
+    try:
+        HOOK_STATE_DIR.mkdir(parents=True, exist_ok=True)
+        delegated_marker_path(key).write_text(parent, encoding="utf-8")
+    except OSError:
+        pass
+
+
 def reset_completion_marker(key: str) -> None:
     try:
         completion_marker_path(key).unlink(missing_ok=True)
@@ -443,6 +488,18 @@ def process_hook(source: str, payload: dict[str, Any]) -> None:
     }.get(semantic, event)
     key = session_key(source, payload)
     tool = normalized_tool(payload)
+
+    # Codex is frequently used as an implementation worker inside Claude
+    # Desktop. Its Stop then means only "the delegated subtask returned", not
+    # that the user's top-level task is finished. Let Claude own every visible
+    # state for that workflow and leave a marker so the transcript watcher also
+    # ignores the nested Codex task_complete record.
+    parent = delegated_parent(source, payload)
+    if parent:
+        mark_delegated(key, parent)
+        if event in {"SessionStart", "Stop", "StopFailure", "SessionEnd"}:
+            log_event(source, event, key, tool, "delegated", f"parent={parent}")
+        return
 
     if event in {"SessionStart", "UserPromptSubmit"}:
         # A new turn resolves stale attention/failure states, but it must not

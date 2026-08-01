@@ -36,6 +36,30 @@ class AgentLightHookTests(unittest.TestCase):
     def test_stop_is_one_minute_green_and_forces_a_new_burst(self) -> None:
         self.assertRegex(self.command_for({"hook_event_name": "Stop"}), r"^set codex-.+ green 60 force$")
 
+    def test_codex_delegated_by_claude_never_controls_the_lamp(self) -> None:
+        commands: list[str] = []
+        with patch.dict(os.environ, {
+            "CLAUDE_CODE_CHILD_SESSION": "1",
+            "CLAUDE_CODE_ENTRYPOINT": "claude-desktop",
+            "CLAUDECODE": "1",
+            "CODEX_COMPANION_SESSION_ID": "claude-parent",
+        }, clear=False), \
+             patch.object(agent_light, "send_event", side_effect=lambda _source, command: commands.append(command)), \
+             patch.object(agent_light, "mark_delegated") as marked, \
+             patch.object(agent_light, "log_event") as logged:
+            agent_light.process_hook("codex", {"session_id": "nested-codex", "hook_event_name": "Stop"})
+        self.assertEqual(commands, [])
+        marked.assert_called_once()
+        self.assertEqual(marked.call_args.args[1], "claude")
+        self.assertEqual(logged.call_args.args[4], "delegated")
+
+    def test_direct_codex_is_not_mistaken_for_a_claude_child(self) -> None:
+        self.assertEqual(agent_light.delegated_parent("codex", {}, {}), "")
+        self.assertEqual(
+            agent_light.delegated_parent("codex", {"_codelight_parent_provider": "claude"}, {}),
+            "claude",
+        )
+
     def test_new_prompt_preserves_completion_green_via_activity(self) -> None:
         self.assertRegex(
             self.command_for({"hook_event_name": "UserPromptSubmit"}),
@@ -217,6 +241,32 @@ class AgentLightHookTests(unittest.TestCase):
             status_watch.classify_record({"type": "event_msg", "payload": {"type": "task_complete", "error": None}}),
             ("green", "task_complete"),
         )
+
+    def test_runtime_watch_suppresses_rollout_owned_by_claude(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "rollout.jsonl"
+            path.write_text(json.dumps({
+                "type": "session_meta",
+                "payload": {"session_id": "nested", "originator": "Claude Code", "source": "vscode"},
+            }) + "\n")
+            delegated, key = status_watch.delegated_rollout(path)
+        self.assertTrue(delegated)
+        self.assertEqual(key, status_watch.codex_session_key("nested"))
+
+    def test_runtime_watch_uses_hook_marker_for_claude_spawned_codex_exec(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            path = root / "rollout.jsonl"
+            path.write_text(json.dumps({
+                "type": "session_meta",
+                "payload": {"session_id": "nested-exec", "originator": "codex_exec", "source": "exec"},
+            }) + "\n")
+            key = status_watch.codex_session_key("nested-exec")
+            with patch.object(status_watch, "HOOK_STATE_DIR", root):
+                status_watch.delegated_marker_path(key).write_text("claude")
+                delegated, actual = status_watch.delegated_rollout(path)
+        self.assertTrue(delegated)
+        self.assertEqual(actual, key)
 
     def test_network_notification_is_yellow_for_every_provider(self) -> None:
         self.assertRegex(
