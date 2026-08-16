@@ -40,9 +40,9 @@ echo "[3/5] 安装 macOS LaunchAgent"
     <string>48733</string>
   </array>
   <key>RunAtLoad</key>
-  <true/>
+  <false/>
   <key>KeepAlive</key>
-  <true/>
+  <false/>
   <key>ProcessType</key>
   <string>Interactive</string>
   <key>StandardOutPath</key>
@@ -62,7 +62,7 @@ PLIST
   <key>Label</key><string>com.local.agent-status-light-watch</string>
   <key>ProgramArguments</key>
   <array><string>/usr/bin/python3</string><string>$BIN_DIR/agent-light-watch</string></array>
-  <key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
+  <key>RunAtLoad</key><false/><key>KeepAlive</key><false/>
   <key>ProcessType</key><string>Background</string>
   <key>StandardOutPath</key><string>$LOG_DIR/watch.log</string>
   <key>StandardErrorPath</key><string>$LOG_DIR/watch-error.log</string>

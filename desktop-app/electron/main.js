@@ -471,7 +471,8 @@ function createWindow() {
   mainWindow.on('close', (event) => {
     if (!quitting) {
       event.preventDefault();
-      mainWindow.hide();
+      quitting = true;
+      app.quit();
     }
   });
 
@@ -987,7 +988,7 @@ function installMacBackend() {
 <plist version="1.0"><dict>
 <key>Label</key><string>${WATCH_LABEL}</string>
 <key>ProgramArguments</key><array><string>/usr/bin/python3</string><string>${escapeXml(watchTarget)}</string></array>
-<key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
+<key>RunAtLoad</key><false/><key>KeepAlive</key><false/>
 <key>ProcessType</key><string>Background</string>
 <key>StandardOutPath</key><string>${escapeXml(path.join(logs, 'watch.log'))}</string>
 <key>StandardErrorPath</key><string>${escapeXml(path.join(logs, 'watch-error.log'))}</string>
@@ -1017,6 +1018,12 @@ function stopMacDaemons() {
   macDaemonGeneration += 1;
   for (const child of macDaemonProcesses.values()) child.kill('SIGTERM');
   macDaemonProcesses.clear();
+}
+
+function stopMacWatcher() {
+  if (!isMac) return;
+  const domain = `gui/${process.getuid()}`;
+  spawnSync('/bin/launchctl', ['bootout', `${domain}/${WATCH_LABEL}`], { timeout: 1800 });
 }
 
 function startMacDaemons(executable, logs) {
@@ -1372,7 +1379,7 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(() => {
     app.setName('CodeLight');
     saveSettings(settings);
-    if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: true, args: ['--hidden'] });
+    if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: false });
     configureBluetoothPermissions();
     registerIPC();
     createWindow();
@@ -1389,6 +1396,6 @@ if (!app.requestSingleInstanceLock()) {
   });
 }
 
-app.on('before-quit', () => { quitting = true; stopMacDaemons(); for (const runtime of windowsRuntimes.values()) runtime.close(); hookServer?.close(); });
+app.on('before-quit', () => { quitting = true; stopMacDaemons(); stopMacWatcher(); for (const runtime of windowsRuntimes.values()) runtime.close(); hookServer?.close(); });
 app.on('activate', () => { if (mainWindow) mainWindow.show(); else createWindow(); });
 app.on('window-all-closed', () => { if (!isMac) { /* tray keeps the app alive */ } });

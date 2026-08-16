@@ -33,6 +33,13 @@ class AgentLightHookTests(unittest.TestCase):
         self.assertEqual(len(commands), 1)
         return commands[0]
 
+    def test_closed_app_is_never_relaunched_by_a_hook(self) -> None:
+        with patch.object(agent_light.socket, "create_connection", side_effect=OSError("offline")), \
+             patch.object(agent_light.subprocess, "run") as run, \
+             patch.object(agent_light, "log_error"):
+            self.assertEqual(agent_light.send("status"), "")
+        run.assert_not_called()
+
     def test_stop_is_one_minute_green_and_forces_a_new_burst(self) -> None:
         self.assertRegex(self.command_for({"hook_event_name": "Stop"}), r"^set codex-.+ green 60 force$")
 

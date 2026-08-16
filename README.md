@@ -185,7 +185,7 @@ The current hardware integration is built and tested for the **JTX-RGB / Colorfu
 - **Persistent event history** — interrupted signals remain available in the app's event log.
 - **Charging-animation suppression** — hides the firmware's four-bar charging animation by default, with a temporary 10-second battery view.
 - **Local-first operation** — BLE control, hooks, and state aggregation run on your computer.
-- **Tray and login startup** — monitoring continues when the main window is hidden.
+- **Manual start and full quit** — CodeLight only monitors while you have opened it; closing the main window stops the app and its BLE background processes.
 
 ### Provider presets
 

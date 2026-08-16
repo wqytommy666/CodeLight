@@ -216,21 +216,8 @@ def send(command: str, retry: bool = True, port: int = PORT, label: str = LABEL)
             sock.sendall((command.rstrip() + "\n").encode("utf-8"))
             return sock.recv(16_384).decode("utf-8", "replace").strip()
     except OSError as exc:
-        if retry:
-            try:
-                # The macOS app owns the BLE child processes so the system's
-                # Bluetooth consent is attributed to the visible CodeLight app.
-                subprocess.run(
-                    ["/usr/bin/open", "-gj", "-a", "CodeLight"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    timeout=1.0,
-                    check=False,
-                )
-                time.sleep(0.75)
-                return send(command, retry=False, port=port, label=label)
-            except Exception:
-                pass
+        # CodeLight is intentionally manual-start only. Hooks may report an
+        # event while the app is closed, but must never reopen the app.
         log_error(f"send failed: {exc}; command={command!r}")
         return ""
 
